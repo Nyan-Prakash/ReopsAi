@@ -1064,4 +1064,262 @@ export const useAuthStore = create<AuthState>((set) => ({
 
 ---
 
+## 5. Student/Public Surfaces
+
+### 5.1 Pages & Routes
+
+#### "/" - Help Center Landing
+- **Purpose**: Entry point for student self-service
+- **Components**:
+  - Hero section with search bar (global KB search)
+  - Top 6 popular articles (analytics-driven)
+  - Quick links to service catalog
+  - Language toggle (en/ar)
+  - Recent announcements banner (max 3)
+- **Route**: `/` (public)
+- **Data**: `GET /kb?featured=true`, `GET /announcements?limit=3`
+
+#### "/kb" - Knowledge Base Browse
+- **Purpose**: Searchable, filterable article library
+- **Components**:
+  - Search input (debounced 300ms)
+  - Filters: category, department, tags
+  - Sort: relevance, date, views
+  - Article grid/list toggle
+  - Pagination (20/page)
+- **Route**: `/kb` (public)
+- **Data**: `GET /kb?q={query}&category={cat}&dept={dept}&page={n}`
+
+#### "/kb/[articleId]" - Article Detail
+- **Purpose**: Full article view with helpful/not-helpful feedback
+- **Components**:
+  - Article metadata (author, updated date, views)
+  - Rich text content (supports images, videos, code blocks)
+  - "Was this helpful?" Y/N buttons
+  - Related articles (3-5)
+  - Breadcrumb navigation
+  - "Still need help?" → Service catalog CTA
+- **Route**: `/kb/:articleId` (public)
+- **Data**: `GET /kb/:articleId`, `POST /kb/:articleId/feedback`
+
+#### "/catalog" - Service Catalog
+- **Purpose**: Browse & submit service requests by department
+- **Components**:
+  - Department tabs (Admissions, Finance, Registrar, IT, Other)
+  - Service cards with description & est. response time
+  - Search within catalog
+  - Request form modal/page (dynamic fields per service)
+- **Route**: `/catalog` (public)
+- **Data**: `GET /catalog?dept={dept}`
+
+#### "/request/[id]" - Request Status Tracking
+- **Purpose**: Track submitted request lifecycle
+- **Components**:
+  - Status timeline (Submitted → In Progress → Resolved)
+  - Request details (read-only)
+  - Agent notes (public-facing only)
+  - Reopen button (if resolved <7 days)
+  - Email confirmation link entry (for anonymous tracking)
+- **Route**: `/request/:id?token={token}` (public with token)
+- **Data**: `GET /request/:id`, `PATCH /request/:id/reopen`
+
+#### "/chat" - Student Assistant (STUB)
+- **Purpose**: PLACEHOLDER UI frame for future AI chatbot
+- **Components**:
+  - Chat bubble UI (greyed out / disabled input)
+  - Placeholder message: "Chat assistant coming soon"
+  - **Escalate to Ticket** button (active) → opens catalog form with pre-filled context
+  - Disclaimer: "For immediate help, visit /kb or /catalog"
+- **Route**: `/chat` (public)
+- **Data**: `POST /chat/escalate` (creates ticket)
+- **Note**: NO bot logic, NO message streaming—UI shell only
+
+---
+
+### 5.2 Core Flows
+
+#### Flow A: Search → Read → Self-Solve
+1. Student lands on `/` or `/kb`
+2. Searches "how to pay tuition"
+3. Clicks article "Tuition Payment Methods"
+4. Reads content
+5. Clicks "Helpful" → analytics event fired
+6. Exits or browses related articles
+
+#### Flow B: Browse → Catalog → Submit Request
+1. Student visits `/catalog`
+2. Selects "Finance" tab
+3. Clicks "Tuition Payment Plan" service card
+4. Fills dynamic form (name, email, student ID, reason, amount)
+5. Submits → `POST /request` → receives ticket ID & email confirmation
+6. Redirected to `/request/:id` status page
+
+#### Flow C: Missing Info Request Loop
+1. Agent marks ticket "Awaiting Student Info"
+2. System sends email/SMS (placeholder stubs: log to console + MSW intercept)
+3. Email contains link: `/request/:id?token={uuid}`
+4. Student clicks link, sees form to add info
+5. Submits → ticket status → "In Progress"
+6. Agent receives notification (stub)
+
+#### Flow D: Escalate from Chat Stub
+1. Student visits `/chat`
+2. Clicks "Escalate to Ticket" button
+3. Modal opens with pre-filled context: "Student requested help via chat"
+4. Student selects department & service, adds details
+5. Submits → `POST /chat/escalate` → creates ticket
+6. Redirected to `/request/:id`
+
+---
+
+### 5.3 Validation & Forms
+
+#### Reusable Form Field Patterns
+```typescript
+// Schema-driven validation (Zod)
+export const StudentRequestSchema = z.object({
+  name: z.string().min(2, "Name required").max(100),
+  email: z.string().email("Invalid email"),
+  studentId: z.string().regex(/^S\d{7}$/, "Format: S1234567").optional(),
+  department: z.enum(["Admissions", "Finance", "Registrar", "IT", "Other"]),
+  serviceId: z.string().uuid(),
+  description: z.string().min(10, "Min 10 chars").max(2000),
+  attachments: z.array(z.instanceof(File)).max(3, "Max 3 files"),
+  consent: z.boolean().refine(val => val === true, "Consent required")
+});
+```
+
+#### Department-Specific Templates
+- **Admissions**: name, email, program, term, transcript (file)
+- **Finance**: name, email, studentId, amount, paymentMethod, reason
+- **Registrar**: name, email, studentId, courseCode, semester, requestType
+- **Other**: name, email, category (dropdown), description
+
+---
+
+### 5.4 Accessibility & Mobile
+
+#### A11y Rules
+- All interactive elements: `aria-label` or visible text
+- Form fields: associated `<label>` or `aria-labelledby`
+- Color contrast ratio ≥ 4.5:1 (WCAG AA)
+- Focus visible: `ring-2 ring-offset-2 ring-blue-500`
+- Keyboard nav: Tab order logical, Enter/Space activate buttons
+- Screen reader: semantic HTML (`<main>`, `<nav>`, `<article>`)
+- Skip to main content link (visually hidden, keyboard visible)
+
+#### Mobile Breakpoints
+- **sm**: 640px (single column, larger touch targets 44×44px)
+- **md**: 768px (2-col grid for articles/services)
+- **lg**: 1024px (3-col, sidebar filters)
+- Hamburger menu for nav <768px
+- Fixed bottom CTA bar on mobile catalog
+
+---
+
+### 5.5 i18n & RTL
+
+#### Language Toggle
+- Dropdown in header: English | العربية
+- Sets cookie `locale=en|ar`
+- Reloads page or updates context (Next.js i18n routing)
+
+#### RTL Layout Rules
+```css
+/* Tailwind RTL plugin */
+html[dir="rtl"] .text-left { text-align: right; }
+html[dir="rtl"] .ml-4 { margin-right: 1rem; margin-left: 0; }
+/* Use logical properties where possible */
+.padding-inline-start { /* auto-flips */ }
+```
+
+#### Sample i18n Keys (en)
+```json
+{
+  "nav.home": "Home",
+  "nav.kb": "Knowledge Base",
+  "nav.catalog": "Service Catalog",
+  "search.placeholder": "Search for help...",
+  "article.helpful": "Was this helpful?",
+  "form.submit": "Submit Request",
+  "form.required": "Required field",
+  "ticket.status.submitted": "Submitted",
+  "ticket.status.inProgress": "In Progress",
+  "ticket.status.resolved": "Resolved",
+  "chat.placeholder": "Chat assistant coming soon",
+  "chat.escalate": "Create Ticket Instead",
+  "error.network": "Network error. Please try again.",
+  "success.submitted": "Request submitted successfully!",
+  "catalog.dept.admissions": "Admissions",
+  "catalog.dept.finance": "Finance",
+  "catalog.dept.registrar": "Registrar",
+  "catalog.dept.it": "IT Support",
+  "catalog.dept.other": "Other"
+}
+```
+
+#### Sample i18n Keys (ar) - Representative Only
+```json
+{
+  "nav.home": "الرئيسية",
+  "nav.kb": "قاعدة المعرفة",
+  "nav.catalog": "كتالوج الخدمات",
+  "search.placeholder": "ابحث عن مساعدة...",
+  "article.helpful": "هل كان هذا مفيداً؟",
+  "form.submit": "إرسال الطلب",
+  "form.required": "حقل مطلوب",
+  "ticket.status.submitted": "تم الإرسال",
+  "ticket.status.inProgress": "قيد المعالجة",
+  "ticket.status.resolved": "تم الحل"
+}
+```
+
+---
+
+### 5.6 Acceptance Criteria
+
+#### "/" - Help Center Landing
+- [ ] Search bar visible, functional (debounced, hits `GET /kb`)
+- [ ] Top 6 featured articles display with titles, summaries
+- [ ] Language toggle switches between en/ar, updates UI
+- [ ] Announcements banner shows max 3 items
+- [ ] Mobile: single column, touch-friendly targets
+
+#### "/kb" - Knowledge Base
+- [ ] Search returns filtered results within 500ms (MSW delay)
+- [ ] Filters (category, dept) update results without page reload
+- [ ] Pagination works, shows "Page X of Y"
+- [ ] Article cards clickable → navigate to `/kb/:id`
+- [ ] Keyboard navigable, screen reader announces result count
+
+#### "/kb/[articleId]" - Article Detail
+- [ ] Article content renders (headings, lists, images)
+- [ ] "Helpful" buttons fire analytics event (console log)
+- [ ] Related articles display (3-5)
+- [ ] Breadcrumb shows Home > KB > Category > Article
+- [ ] CTA "Still need help?" links to `/catalog`
+
+#### "/catalog" - Service Catalog
+- [ ] Department tabs switch content without reload
+- [ ] Service cards show title, description, est. time
+- [ ] Clicking service opens request form (modal or page)
+- [ ] Form validates (Zod schema), shows inline errors
+- [ ] Submit creates ticket, redirects to `/request/:id`
+
+#### "/request/[id]" - Status Tracking
+- [ ] Timeline shows current status with visual indicator
+- [ ] Request details display (read-only)
+- [ ] Reopen button visible if status=Resolved & <7 days
+- [ ] Token-based access works (no auth required)
+- [ ] Mobile: vertical timeline, collapsible details
+
+#### "/chat" - Assistant Stub
+- [ ] UI frame renders (chat bubbles, input disabled)
+- [ ] Placeholder message displays
+- [ ] "Escalate to Ticket" button opens catalog form
+- [ ] Form pre-fills context: "Escalated from chat"
+- [ ] Submit creates ticket via `POST /chat/escalate`
+
+---
+
 [END PART 1/6]
