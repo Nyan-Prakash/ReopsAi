@@ -7475,3 +7475,3628 @@ const exampleEvents = [
 ---
 
 END PART 4
+
+---
+
+## 17. AI Prompts & Models
+
+### 17.1 Model Registry
+
+**Abstract Model Descriptor**:
+```typescript
+interface ModelDescriptor {
+  id: string;                      // e.g. "gpt-4o", "claude-3.5-sonnet", "gemini-1.5-pro"
+  family: string;                  // "openai" | "anthropic" | "google"
+  capabilities: {
+    json: boolean;                 // structured output support
+    reasoning: boolean;            // advanced reasoning capability
+    tools?: string[];              // ["function_calling", "web_search", ...]
+  };
+  maxTokens: number;               // context window size
+  costClass: "low" | "med" | "high";
+  timeoutMs: number;               // default timeout
+}
+```
+
+**Selection Policy** (task → model mapping with fallback order):
+
+| Task           | Primary Model          | Fallback 1             | Fallback 2          |
+|----------------|------------------------|------------------------|---------------------|
+| `classifier`   | gpt-4o-mini            | claude-3-haiku         | gemini-1.5-flash    |
+| `router`       | claude-3.5-sonnet      | gpt-4o                 | gemini-1.5-pro      |
+| `draft`        | claude-3.5-sonnet      | gpt-4o                 | gemini-1.5-pro      |
+| `rewrite`      | gpt-4o                 | claude-3.5-sonnet      | gemini-1.5-pro      |
+| `extract`      | gpt-4o-mini (json)     | claude-3-haiku (json)  | gemini-1.5-flash    |
+
+**Model Registry Configuration**:
+```json
+{
+  "models": [
+    {
+      "id": "gpt-4o-mini",
+      "family": "openai",
+      "capabilities": {"json": true, "reasoning": false, "tools": ["function_calling"]},
+      "maxTokens": 128000,
+      "costClass": "low",
+      "timeoutMs": 15000
+    },
+    {
+      "id": "claude-3.5-sonnet",
+      "family": "anthropic",
+      "capabilities": {"json": true, "reasoning": true, "tools": ["function_calling"]},
+      "maxTokens": 200000,
+      "costClass": "high",
+      "timeoutMs": 30000
+    },
+    {
+      "id": "gpt-4o",
+      "family": "openai",
+      "capabilities": {"json": true, "reasoning": true, "tools": ["function_calling"]},
+      "maxTokens": 128000,
+      "costClass": "high",
+      "timeoutMs": 30000
+    },
+    {
+      "id": "gemini-1.5-pro",
+      "family": "google",
+      "capabilities": {"json": true, "reasoning": true, "tools": ["function_calling"]},
+      "maxTokens": 1000000,
+      "costClass": "med",
+      "timeoutMs": 20000
+    }
+  ]
+}
+```
+
+---
+
+### 17.2 Zod Schemas
+
+**ClassificationResult**:
+```typescript
+import { z } from 'zod';
+
+const ClassificationResultSchema = z.object({
+  intent: z.enum(['admissions_inquiry', 'finance_payment', 'registrar_transcript', 'general_support', 'complaint', 'feedback']),
+  confidence: z.number().min(0).max(1),
+  reasoning: z.string(),
+  urgency: z.enum(['low', 'medium', 'high', 'critical']),
+  sentiment: z.enum(['positive', 'neutral', 'negative']),
+  language: z.enum(['en', 'ar']),
+  suggestedTags: z.array(z.string()).max(5)
+});
+
+type ClassificationResult = z.infer<typeof ClassificationResultSchema>;
+```
+
+**Valid JSON Example**:
+```json
+{
+  "intent": "finance_payment",
+  "confidence": 0.92,
+  "reasoning": "Student inquiring about tuition payment deadline and acceptable payment methods.",
+  "urgency": "medium",
+  "sentiment": "neutral",
+  "language": "en",
+  "suggestedTags": ["tuition", "payment-deadline", "payment-methods"]
+}
+```
+
+---
+
+**RoutingDecision**:
+```typescript
+const RoutingDecisionSchema = z.object({
+  department: z.enum(['admissions', 'finance', 'registrar', 'it_support', 'student_affairs', 'general']),
+  assigneeId: z.string().nullable(),
+  priority: z.enum(['low', 'medium', 'high', 'urgent']),
+  estimatedSLA: z.number().describe('hours until due'),
+  reasoning: z.string(),
+  requiresHuman: z.boolean(),
+  relatedPolicyIds: z.array(z.string()).max(3)
+});
+
+type RoutingDecision = z.infer<typeof RoutingDecisionSchema>;
+```
+
+**Valid JSON Example**:
+```json
+{
+  "department": "finance",
+  "assigneeId": "agent_finance_002",
+  "priority": "high",
+  "estimatedSLA": 24,
+  "reasoning": "Payment deadline inquiry requires Finance team; student mentioned upcoming deadline creating urgency.",
+  "requiresHuman": false,
+  "relatedPolicyIds": ["POL-FIN-001", "POL-FIN-012"]
+}
+```
+
+---
+
+**DraftReply**:
+```typescript
+const CitationSchema = z.object({
+  articleId: z.string(),
+  title: z.string(),
+  section: z.string().optional(),
+  url: z.string().url()
+});
+
+const DraftReplySchema = z.object({
+  body: z.string().min(50).max(2000),
+  tone: z.enum(['brief', 'neutral', 'warm']),
+  language: z.enum(['en', 'ar']),
+  citations: z.array(CitationSchema).min(1).describe('Required for policy answers'),
+  nextSteps: z.array(z.string()).max(3).optional(),
+  requiresManagerReview: z.boolean()
+});
+
+type DraftReply = z.infer<typeof DraftReplySchema>;
+type Citation = z.infer<typeof CitationSchema>;
+```
+
+**Valid JSON Example**:
+```json
+{
+  "body": "Hello Ahmed,\n\nThank you for your inquiry about tuition payment. Payment is due by the 15th of each month. We accept bank transfer, credit card, and cash payments at the Finance Office.\n\nFor installment plans, please submit a request through the Student Portal at least 10 days before the payment deadline.\n\nBest regards,\nReOps Finance Team",
+  "tone": "warm",
+  "language": "en",
+  "citations": [
+    {
+      "articleId": "KB-FIN-001",
+      "title": "Tuition Payment Policies",
+      "section": "Payment Methods & Deadlines",
+      "url": "https://kb.reops.example/finance/payment-policies"
+    }
+  ],
+  "nextSteps": ["Submit installment request if needed", "Contact Finance Office for payment confirmation"],
+  "requiresManagerReview": false
+}
+```
+
+---
+
+**PolicyCheckResult**:
+```typescript
+const PolicyCheckResultSchema = z.object({
+  compliant: z.boolean(),
+  violatedPolicies: z.array(z.string()),
+  reasoning: z.string(),
+  suggestedRevision: z.string().optional()
+});
+
+type PolicyCheckResult = z.infer<typeof PolicyCheckResultSchema>;
+```
+
+**Valid JSON Example**:
+```json
+{
+  "compliant": false,
+  "violatedPolicies": ["POL-COMM-003"],
+  "reasoning": "Draft mentions fee waiver eligibility criteria not approved for public communication per Policy POL-COMM-003.",
+  "suggestedRevision": "Remove mention of specific waiver criteria; instead direct student to meet with Financial Aid advisor."
+}
+```
+
+---
+
+**ExtractionResult**:
+```typescript
+const ExtractionResultSchema = z.object({
+  amountUSD: z.number().nullable(),
+  studentId: z.string().nullable(),
+  invoiceId: z.string().nullable(),
+  courseCode: z.string().nullable(),
+  dueDateISO: z.string().datetime().nullable(),
+  confidence: z.number().min(0).max(1),
+  extractedFields: z.record(z.string(), z.any())
+});
+
+type ExtractionResult = z.infer<typeof ExtractionResultSchema>;
+```
+
+**Valid JSON Example**:
+```json
+{
+  "amountUSD": 1250.00,
+  "studentId": "S2024-3456",
+  "invoiceId": "INV-2024-09-1523",
+  "courseCode": "CS301",
+  "dueDateISO": "2024-10-15T23:59:59Z",
+  "confidence": 0.95,
+  "extractedFields": {
+    "paymentMethod": "bank_transfer",
+    "semesterCode": "FALL2024"
+  }
+}
+```
+
+---
+
+### 17.3 Prompt Templates
+
+#### **Classifier Prompt**
+
+```
+You are an AI classifier for a university student support system. Analyze the incoming message and return a JSON classification.
+
+# Task
+Classify the student inquiry into ONE intent category, assess urgency, sentiment, and suggest up to 5 tags.
+
+# Intent Categories
+- admissions_inquiry: Application status, requirements, deadlines
+- finance_payment: Tuition, fees, payment plans, invoices
+- registrar_transcript: Transcripts, grades, enrollment verification, course registration
+- general_support: General questions, facility info, campus services
+- complaint: Formal complaints, service issues
+- feedback: Suggestions, praise, general feedback
+
+# Few-Shot Examples
+
+**Example 1 (Admissions)**:
+Input: "I submitted my application 3 weeks ago but haven't heard back. My application ID is APP-2024-8821. When will I get a decision?"
+
+Output:
+{
+  "intent": "admissions_inquiry",
+  "confidence": 0.96,
+  "reasoning": "Student asking about application status with specific application ID. Clear admissions-related inquiry.",
+  "urgency": "medium",
+  "sentiment": "neutral",
+  "language": "en",
+  "suggestedTags": ["application-status", "admissions", "follow-up"]
+}
+
+**Example 2 (Finance)**:
+Input: "My invoice shows $1,500 due on Oct 15th but I already paid $1,000 last week. Can you check invoice INV-2024-09-1523?"
+
+Output:
+{
+  "intent": "finance_payment",
+  "confidence": 0.94,
+  "reasoning": "Student reporting payment discrepancy with specific invoice number and amounts. Finance department issue.",
+  "urgency": "high",
+  "sentiment": "neutral",
+  "language": "en",
+  "suggestedTags": ["payment-discrepancy", "invoice", "billing-error"]
+}
+
+**Example 3 (Registrar)**:
+Input: "أحتاج كشف درجات رسمي لتقديمه إلى السفارة. هل يمكنني الحصول عليه اليوم؟"
+
+Output:
+{
+  "intent": "registrar_transcript",
+  "confidence": 0.97,
+  "reasoning": "Student requesting official transcript for embassy submission (Arabic). Registrar service request with same-day urgency.",
+  "urgency": "high",
+  "sentiment": "neutral",
+  "language": "ar",
+  "suggestedTags": ["transcript-request", "official-documents", "urgent"]
+}
+
+# Instructions
+- Return ONLY valid JSON matching ClassificationResult schema
+- Confidence 0.8+ for clear intent; 0.5-0.79 for ambiguous; <0.5 triggers human review
+- Urgency "critical" only for same-day deadlines or emergencies
+- Use student's language for "language" field
+
+Now classify this message:
+{{message.body}}
+```
+
+---
+
+#### **Router Prompt**
+
+```
+You are a routing engine for a university support system. Route the classified inquiry to the appropriate department and assignee.
+
+# Departments
+- admissions: Application processing, admission decisions, enrollment
+- finance: Tuition, payments, invoices, financial aid
+- registrar: Transcripts, grades, course registration, enrollment verification
+- it_support: Portal access, password resets, system issues
+- student_affairs: Student conduct, housing, campus life
+- general: Unclassified or multi-department issues
+
+# SLA Guidelines (hours)
+- Admissions: 48h (standard), 24h (near deadline)
+- Finance: 24h (payment issues), 48h (general inquiries)
+- Registrar: 24h (transcript requests), 48h (general)
+- IT Support: 4h (access issues), 24h (general)
+- Student Affairs: 72h (standard)
+
+# Routing Rules
+1. Match intent to department
+2. Assign to specialist if student has prior cases with that agent
+3. Set priority based on urgency + proximity to deadline
+4. requiresHuman=true if: complaint, policy exception request, or confidence <0.7
+5. Link related policy IDs from knowledge base (§15)
+
+# Few-Shot Examples
+
+**Example 1 (Finance)**:
+Classification:
+{
+  "intent": "finance_payment",
+  "urgency": "high",
+  "studentId": "S2024-3456"
+}
+
+Student History:
+- Previous case with agent_finance_002 (resolved in 12h)
+
+Output:
+{
+  "department": "finance",
+  "assigneeId": "agent_finance_002",
+  "priority": "high",
+  "estimatedSLA": 24,
+  "reasoning": "Payment inquiry with high urgency. Assigning to agent_finance_002 due to prior successful resolution with this student.",
+  "requiresHuman": false,
+  "relatedPolicyIds": ["POL-FIN-001", "POL-FIN-012"]
+}
+
+**Example 2 (Registrar)**:
+Classification:
+{
+  "intent": "registrar_transcript",
+  "urgency": "high",
+  "language": "ar"
+}
+
+Output:
+{
+  "department": "registrar",
+  "assigneeId": "agent_registrar_005",
+  "priority": "high",
+  "estimatedSLA": 24,
+  "reasoning": "Urgent transcript request in Arabic. Assigning to agent_registrar_005 (Arabic-speaking specialist). High priority due to urgency.",
+  "requiresHuman": false,
+  "relatedPolicyIds": ["POL-REG-008"]
+}
+
+# Input
+Classification: {{classificationResult}}
+Student ID: {{student.id}}
+Student Name: {{student.name}}
+Prior Cases: {{student.recentCases}}
+
+# Instructions
+- Return ONLY valid JSON matching RoutingDecision schema
+- If no specialist match, assigneeId = null (round-robin assignment)
+- Link policies from KB (max 3)
+- Calculate SLA from department guidelines + urgency
+
+Route this inquiry:
+```
+
+---
+
+#### **Draft Composer Prompt**
+
+```
+You are a draft reply composer for a university support system. Generate a professional, helpful reply to the student inquiry.
+
+# Tone Guidelines
+- brief: 2-3 sentences, direct answer only
+- neutral: Professional, factual, 4-6 sentences
+- warm: Friendly, empathetic, personalized, 5-8 sentences
+
+# Requirements
+1. Address student by name if available: {{student.name}}
+2. Cite at least ONE knowledge base article for policy-related answers
+3. Use {{policy.ref}} placeholders for policy references
+4. Provide clear next steps (max 3)
+5. End with appropriate sign-off
+6. If Arabic (language=ar), use RTL-friendly formatting
+
+# Citation Format
+For every policy or procedural answer, include citations array with articleId, title, section, url.
+
+# Few-Shot Examples
+
+**Example 1 (Finance - Warm Tone)**:
+Input:
+{
+  "intent": "finance_payment",
+  "studentName": "Ahmed Hassan",
+  "inquiry": "Can I pay my tuition in installments? The full amount is due next week.",
+  "tone": "warm",
+  "language": "en"
+}
+
+Knowledge Base Match:
+- Article: KB-FIN-001 "Tuition Payment Policies"
+- Section: "Installment Plans"
+- Content: "Students may request 3-month installment plans by submitting Form FIN-102 at least 10 days before the payment deadline."
+
+Output:
+{
+  "body": "Hello Ahmed,\n\nThank you for reaching out! Yes, you can request a tuition installment plan. We offer 3-month payment plans to help students manage their tuition costs.\n\nTo apply, please submit Form FIN-102 through the Student Portal at least 10 days before your payment deadline. Since your payment is due next week, I recommend submitting your request today to ensure it's processed in time.\n\nIf you have any questions about the installment process or need assistance with the form, our Finance Office is happy to help.\n\nBest regards,\nReOps Finance Team",
+  "tone": "warm",
+  "language": "en",
+  "citations": [
+    {
+      "articleId": "KB-FIN-001",
+      "title": "Tuition Payment Policies",
+      "section": "Installment Plans",
+      "url": "https://kb.reops.example/finance/payment-policies#installments"
+    }
+  ],
+  "nextSteps": [
+    "Submit Form FIN-102 via Student Portal today",
+    "Contact Finance Office at finance@reops.example if you need help"
+  ],
+  "requiresManagerReview": false
+}
+
+**Example 2 (Admissions - Brief Tone)**:
+Input:
+{
+  "intent": "admissions_inquiry",
+  "studentName": "Sara",
+  "inquiry": "What documents do I need for my application?",
+  "tone": "brief",
+  "language": "en"
+}
+
+Knowledge Base Match:
+- Article: KB-ADM-003 "Application Requirements"
+- Content: "Required: High school transcript, national ID copy, passport photo, completed application form."
+
+Output:
+{
+  "body": "Hi Sara,\n\nYou'll need: high school transcript, national ID copy, passport photo, and completed application form. Full details are in our Application Requirements guide.\n\nBest,\nAdmissions Team",
+  "tone": "brief",
+  "language": "en",
+  "citations": [
+    {
+      "articleId": "KB-ADM-003",
+      "title": "Application Requirements",
+      "url": "https://kb.reops.example/admissions/requirements"
+    }
+  ],
+  "nextSteps": ["Review full checklist at kb.reops.example/admissions/requirements"],
+  "requiresManagerReview": false
+}
+
+# Input
+Student Name: {{student.name}}
+Inquiry: {{case.body}}
+Intent: {{classification.intent}}
+Tone: {{settings.tone}}
+Language: {{classification.language}}
+Knowledge Base Articles: {{kb.matches}}
+
+# Instructions
+- Return ONLY valid JSON matching DraftReply schema
+- MUST include citations array (min 1 for policy answers)
+- Use student's name in greeting
+- If KB has no match, set requiresManagerReview=true and note "No KB article found"
+- For Arabic, write body in Arabic (RTL will be handled by UI)
+
+Draft reply:
+```
+
+---
+
+#### **Rewrite Prompt**
+
+```
+You are a readability optimizer for student communications. Rewrite the draft to target B2 reading level (CEFR) while preserving meaning and citations.
+
+# B2 Reading Level Guidelines
+- Average sentence length: 15-20 words
+- Use common vocabulary (avoid jargon unless defined)
+- Active voice preferred
+- Break complex sentences into shorter ones
+- Maintain professional tone
+
+# Arabic Note
+For Arabic text, ensure RTL compatibility. Avoid complex nested clauses. Use Modern Standard Arabic, not dialectal forms.
+
+# Few-Shot Example
+
+**Example 1 (English)**:
+Original Draft:
+"Pursuant to university regulation 4.2.3, students who fail to submit the requisite documentation by the prescribed deadline will be subject to administrative penalties including but not limited to late fees and potential enrollment suspension pending receipt of outstanding materials."
+
+Rewritten (B2):
+"According to university policy, you must submit all required documents by the deadline. If you miss the deadline, you may face late fees. In some cases, your enrollment may be suspended until we receive the missing documents."
+
+**Example 2 (Arabic)**:
+Original:
+"وفقاً للمادة ٤.٢.٣ من اللوائح الجامعية، يتعين على الطلاب الذين يخفقون في تقديم الوثائق المطلوبة ضمن المهلة المحددة أن يتحملوا العقوبات الإدارية..."
+
+Rewritten (B2):
+"حسب سياسة الجامعة، يجب تقديم جميع المستندات المطلوبة قبل الموعد النهائي. إذا تأخرت، قد تدفع رسوم تأخير. في بعض الحالات، قد يتم تعليق تسجيلك حتى نستلم المستندات."
+
+# Input
+Draft: {{draft.body}}
+Language: {{draft.language}}
+Citations: {{draft.citations}}
+
+# Instructions
+- Rewrite body only (preserve citations, nextSteps, metadata)
+- Target B2 reading level
+- Keep length similar (±20%)
+- Do NOT change meaning or remove policy details
+- For Arabic, use RTL-compatible formatting
+- Return ONLY valid JSON matching DraftReply schema
+
+Rewrite this draft:
+```
+
+---
+
+#### **Extractor Prompt**
+
+```
+You are a structured data extractor for university student communications. Extract specific fields from the message body.
+
+# Target Fields
+- amountUSD: Monetary amount in USD (number or null)
+- studentId: Student ID matching pattern S\d{4}-\d{4} or legacy format
+- invoiceId: Invoice ID matching pattern INV-\d{4}-\d{2}-\d{4}
+- courseCode: Course code (e.g., CS301, MATH101)
+- dueDateISO: Due date in ISO 8601 format (e.g., 2024-10-15T23:59:59Z)
+- confidence: 0.0-1.0 confidence score
+- extractedFields: Additional key-value pairs (flexible)
+
+# Instructions
+- Return ONLY valid JSON matching ExtractionResult schema
+- NO prose, NO explanations outside JSON
+- If field not found, set to null
+- Confidence 1.0 = explicit mention; 0.7-0.9 = inferred from context; <0.7 = uncertain
+- If JSON parsing fails, repair and retry with this hint: "Ensure all string values are properly quoted and dates are ISO 8601"
+
+# Few-Shot Examples
+
+**Example 1 (Finance)**:
+Input: "I need to pay $1,250 for invoice INV-2024-09-1523. My student ID is S2024-3456 and it's due October 15th."
+
+Output:
+{
+  "amountUSD": 1250.00,
+  "studentId": "S2024-3456",
+  "invoiceId": "INV-2024-09-1523",
+  "courseCode": null,
+  "dueDateISO": "2024-10-15T23:59:59Z",
+  "confidence": 0.98,
+  "extractedFields": {
+    "paymentIntent": "pending"
+  }
+}
+
+**Example 2 (Registrar)**:
+Input: "Can I drop CS301? I'm student S2024-7890 and the drop deadline is next Friday."
+
+Output:
+{
+  "amountUSD": null,
+  "studentId": "S2024-7890",
+  "invoiceId": null,
+  "courseCode": "CS301",
+  "dueDateISO": "2024-10-18T23:59:59Z",
+  "confidence": 0.85,
+  "extractedFields": {
+    "action": "course_drop",
+    "urgency": "high"
+  }
+}
+
+# Input
+Message: {{message.body}}
+Current Date: {{context.now}}
+
+# Repair Hint
+If your output causes a JSON parse error, ensure:
+1. All strings use double quotes
+2. Dates are ISO 8601 format with timezone
+3. Numbers have no quotes
+4. No trailing commas
+
+Extract data:
+```
+
+---
+
+### 17.4 Safety & Policy
+
+**Pre-Redaction Rules** (mask PII for non-Manager roles):
+
+| Field              | Agent Role | Manager Role | Admin Role |
+|--------------------|------------|--------------|------------|
+| Email              | `j***@example.com` | `jane@example.com` | Full       |
+| Student ID         | `S****567` | Full         | Full       |
+| Phone              | `+966-***-**34` | Full         | Full       |
+| National ID        | `***456789` | Full         | Full       |
+| Payment Method     | `****1234` (last 4) | Full         | Full       |
+
+**Audited Unmask Toggle**:
+- Manager/Admin can toggle "Show PII" in case detail view
+- Toggle event logged: `audit.pii_view_toggled` with `{userId, caseId, timestamp, reason?}`
+- Shown PII rendered with yellow highlight border
+- Warning banner: "Viewing PII is being logged for audit compliance"
+
+**Refusal Templates**:
+
+```json
+{
+  "refusal": {
+    "toxic_content": "I cannot generate a response to this message due to policy violations. A human agent will review this case. [Case flagged for Manager review]",
+    "insufficient_context": "I don't have enough information to provide a safe, accurate answer. Let me route this to a specialist who can help. [Routed to {{department}}]",
+    "policy_conflict": "This request requires a policy exception. I've flagged it for Manager approval. You'll receive a response within {{sla}}h.",
+    "pii_risk": "This inquiry contains sensitive information that requires human review for compliance. A Finance/Registrar specialist will respond shortly."
+  }
+}
+```
+
+**Toxicity Threshold & Blocklist**:
+- Run content moderation on input: toxicity score >0.75 → refuse + route to Manager
+- Blocklist keywords (case-insensitive): `["fraud", "lawsuit", "lawyer", "discriminat*", "incompetent", "racist"]`
+- If blocklist match OR toxicity high → use `refusal.toxic_content` template
+- Fallback: Use predefined macro from §10 (e.g., "ESCALATE_TO_MANAGER")
+
+**Security Headers**:
+```typescript
+{
+  "X-Content-Type-Options": "nosniff",
+  "X-Frame-Options": "DENY",
+  "Content-Security-Policy": "default-src 'self'",
+  "X-AI-Model-Used": "{{modelId}}",  // for audit trail
+  "X-PII-Redacted": "true"            // if pre-redaction applied
+}
+```
+
+---
+
+### 17.5 Reasoning Trace
+
+**Trace Schema** (stub for future explainability):
+```typescript
+interface ReasoningTrace {
+  decisionId: string;        // UUID
+  inputsHash: string;        // SHA256 of input payload (NOT raw PII)
+  outputsHash: string;       // SHA256 of output payload
+  modelId: string;           // e.g., "gpt-4o-mini"
+  latencyMs: number;
+  tokensUsed: {input: number; output: number};
+  timestamp: string;         // ISO 8601
+  stepReasoning?: string[];  // optional chain-of-thought steps (redacted)
+}
+```
+
+**Storage**:
+- Write to `reasoning_traces` table in Supabase (§4)
+- Indexed on `decisionId`, `timestamp`, `modelId`
+- **NEVER log raw PII** (only hashed representations)
+- Retention: 90 days, then archive to cold storage
+
+**Example Trace**:
+```json
+{
+  "decisionId": "dec_01HZ8X9K2M3N4P5Q6R7S8T9V",
+  "inputsHash": "a3f5e8c9d2b1...",
+  "outputsHash": "b2c4d6e8f0a1...",
+  "modelId": "claude-3.5-sonnet",
+  "latencyMs": 1823,
+  "tokensUsed": {"input": 450, "output": 280},
+  "timestamp": "2024-10-20T14:32:18Z",
+  "stepReasoning": ["Classified as finance_payment (conf=0.94)", "Matched KB-FIN-001", "Generated draft with 1 citation"]
+}
+```
+
+---
+
+### 17.6 Knowledge Citations
+
+**Citation Requirements**:
+- AI drafts answering policy/procedural questions MUST include ≥1 citation
+- Citation links to KB article (§15) with `articleId`, `title`, `section`, `url`
+- If AI generates draft with 0 citations for policy question → flag case with `needs_article_seed`
+- Manager/Admin receives notification: "Draft generated without KB citation. Consider creating/updating KB article."
+
+**Citation Rendering** (UI):
+```html
+<div class="citation-block">
+  <span class="citation-label">📚 Reference:</span>
+  <a href="{{citation.url}}" target="_blank">
+    {{citation.title}} - {{citation.section}}
+  </a>
+</div>
+```
+
+**Seed Workflow** (when `needs_article_seed` flagged):
+1. Manager reviews draft + case context
+2. If answer is correct → Manager clicks "Create KB Article" → pre-filled form with draft content
+3. Manager edits/approves → Article saved to KB (§15)
+4. Future similar inquiries → AI cites new article
+
+**Citation Quality Check**:
+- Validate `citation.url` is reachable (HEAD request, cache 24h)
+- If URL returns 404 → flag article for KB review
+- Telemetry: `reops.ai.citation_broken` (props: `{articleId, url, caseId}`)
+
+---
+
+### 17.7 Fallback Matrix
+
+| Failure Type            | Detection                     | Action                                      | Max Retries |
+|-------------------------|-------------------------------|---------------------------------------------|-------------|
+| **Timeout**             | Model response >timeoutMs     | Use macro fallback (§10) → route to human   | 0           |
+| **Schema Validation Fail** | Zod parse error            | Single retry with `repair_prompt` appended  | 1           |
+| **Rate Limit (429)**    | HTTP 429 from provider        | Switch to alt model + exponential backoff (2^n seconds) | 2 |
+| **JSON Parse Error**    | Invalid JSON in response      | Retry with repair hint (see Extractor prompt) | 1         |
+| **No KB Match**         | 0 citations for policy query  | Set `requiresManagerReview=true` + flag `needs_article_seed` | 0 |
+| **Toxicity Detected**   | Moderation score >0.75        | Use `refusal.toxic_content` → escalate to Manager | 0       |
+| **Model Unavailable (5xx)** | HTTP 500/503              | Switch to fallback model (see §17.1)        | 2           |
+
+**Retry Logic** (pseudocode):
+```typescript
+async function invokeAIWithFallback(task: string, input: any, attempt = 0): Promise<any> {
+  const model = getModelForTask(task, attempt); // attempt 0=primary, 1=fallback1, 2=fallback2
+
+  try {
+    const result = await callModel(model, input, {timeout: model.timeoutMs});
+    const validated = validateSchema(task, result);
+    return validated;
+  } catch (error) {
+    if (error instanceof TimeoutError) {
+      return useMacroFallback(input);
+    }
+    if (error instanceof SchemaValidationError && attempt < 1) {
+      return invokeAIWithFallback(task, {...input, repair_hint: true}, attempt + 1);
+    }
+    if (error instanceof RateLimitError && attempt < 2) {
+      await sleep(2 ** attempt * 1000); // exponential backoff
+      return invokeAIWithFallback(task, input, attempt + 1);
+    }
+    throw error; // unrecoverable
+  }
+}
+```
+
+---
+
+### 17.8 Eval Harness
+
+**Golden Test Sets**:
+
+1. **Intents** (50 examples):
+   - 10 admissions_inquiry
+   - 10 finance_payment
+   - 10 registrar_transcript
+   - 10 general_support
+   - 5 complaint
+   - 5 feedback
+   - Each with ground truth: `{intent, urgency, sentiment, language}`
+
+2. **Drafts** (40 examples):
+   - 15 finance (payment, invoices, installments)
+   - 15 admissions (requirements, status, deadlines)
+   - 10 registrar (transcripts, grades, enrollment)
+   - Each with ground truth: `{expectedCitations, tone, keyPhrases}`
+
+3. **Extractions** (30 examples):
+   - 10 with `amountUSD` + `invoiceId`
+   - 10 with `studentId` + `courseCode`
+   - 10 with `dueDateISO`
+   - Ground truth: exact field values
+
+**Metrics**:
+- **Accuracy** (classification): % correct intent matches
+- **Schema Pass Rate**: % of AI outputs passing Zod validation on first attempt
+- **Citation Rate**: % of policy drafts with ≥1 citation
+- **P95 Latency**: 95th percentile response time (ms)
+- **Fallback Rate**: % of requests requiring fallback model
+
+**Sample Aggregate JSON Row**:
+```json
+{
+  "evalRun": "eval_2024-10-20_01",
+  "timestamp": "2024-10-20T16:45:00Z",
+  "modelId": "claude-3.5-sonnet",
+  "metrics": {
+    "classification": {
+      "accuracy": 0.94,
+      "avgConfidence": 0.89,
+      "p95Latency": 1250
+    },
+    "drafts": {
+      "schemaPassRate": 0.975,
+      "citationRate": 0.92,
+      "avgLength": 312,
+      "p95Latency": 2100
+    },
+    "extraction": {
+      "accuracy": 0.88,
+      "schemaPassRate": 0.95,
+      "avgConfidence": 0.91,
+      "p95Latency": 980
+    }
+  },
+  "fallbackRate": 0.03,
+  "totalTests": 120,
+  "passed": 112,
+  "failed": 8
+}
+```
+
+**CI Integration**:
+- Run eval harness on every PR affecting AI prompts/models
+- Require metrics delta <5% regression vs. baseline
+- Store results in `eval_runs` table (Supabase)
+
+---
+
+### 17.9 AI Endpoints
+
+**POST /api/ai/classify** (tied to §19 API routes)
+
+Request:
+```json
+{
+  "messageBody": "I need my transcript ASAP for visa application",
+  "messageId": "msg_abc123",
+  "studentId": "S2024-5678"
+}
+```
+
+Response (200 OK):
+```json
+{
+  "classification": {
+    "intent": "registrar_transcript",
+    "confidence": 0.95,
+    "reasoning": "Student requesting transcript with urgency (ASAP) for visa.",
+    "urgency": "high",
+    "sentiment": "neutral",
+    "language": "en",
+    "suggestedTags": ["transcript", "urgent", "visa"]
+  },
+  "modelUsed": "gpt-4o-mini",
+  "latencyMs": 1120
+}
+```
+
+Errors:
+- `408 MODEL_TIMEOUT`: Model exceeded timeoutMs
+- `422 SCHEMA_MISMATCH`: Output failed Zod validation after retries
+- `429 RATE_LIMITED`: Exceeded rate limit, retry after backoff
+
+---
+
+**POST /api/ai/route**
+
+Request:
+```json
+{
+  "classification": { /* ClassificationResult */ },
+  "studentId": "S2024-5678",
+  "caseId": "case_xyz789"
+}
+```
+
+Response (200 OK):
+```json
+{
+  "routing": {
+    "department": "registrar",
+    "assigneeId": "agent_registrar_003",
+    "priority": "high",
+    "estimatedSLA": 24,
+    "reasoning": "Urgent transcript request. Assigned to registrar specialist.",
+    "requiresHuman": false,
+    "relatedPolicyIds": ["POL-REG-008"]
+  },
+  "modelUsed": "claude-3.5-sonnet",
+  "latencyMs": 1450
+}
+```
+
+---
+
+**POST /api/ai/draft**
+
+Request:
+```json
+{
+  "caseId": "case_xyz789",
+  "studentName": "Fatima Al-Mansoori",
+  "inquiry": "I need my transcript urgently for my visa application.",
+  "intent": "registrar_transcript",
+  "tone": "warm",
+  "language": "en"
+}
+```
+
+Response (200 OK):
+```json
+{
+  "draft": {
+    "body": "Hello Fatima,\n\nThank you for reaching out. We understand the urgency of your visa application and are happy to help with your transcript request.\n\nOfficial transcripts are typically ready within 24 hours. You can request yours through the Student Portal under 'Academic Records.' For urgent processing, please visit the Registrar's Office in person with your student ID and visa documentation.\n\nWe're here to support you through this process.\n\nBest regards,\nRegistrar Team",
+    "tone": "warm",
+    "language": "en",
+    "citations": [
+      {
+        "articleId": "KB-REG-008",
+        "title": "Transcript Request Process",
+        "section": "Urgent Requests",
+        "url": "https://kb.reops.example/registrar/transcripts#urgent"
+      }
+    ],
+    "nextSteps": [
+      "Submit request via Student Portal",
+      "Visit Registrar's Office for same-day processing if needed"
+    ],
+    "requiresManagerReview": false
+  },
+  "modelUsed": "claude-3.5-sonnet",
+  "latencyMs": 2340
+}
+```
+
+Errors:
+- `404 NO_KB_MATCH`: No KB articles found; draft flagged for manager review
+
+---
+
+**POST /api/ai/rewrite**
+
+Request:
+```json
+{
+  "draft": { /* DraftReply */ },
+  "targetReadingLevel": "B2"
+}
+```
+
+Response (200 OK):
+```json
+{
+  "rewrittenDraft": { /* DraftReply with simplified body */ },
+  "modelUsed": "gpt-4o",
+  "latencyMs": 1890
+}
+```
+
+---
+
+**POST /api/ai/extract**
+
+Request:
+```json
+{
+  "messageBody": "My invoice INV-2024-09-1523 shows $1,250 due Oct 15. Student ID S2024-3456.",
+  "messageId": "msg_def456"
+}
+```
+
+Response (200 OK):
+```json
+{
+  "extraction": {
+    "amountUSD": 1250.00,
+    "studentId": "S2024-3456",
+    "invoiceId": "INV-2024-09-1523",
+    "courseCode": null,
+    "dueDateISO": "2024-10-15T23:59:59Z",
+    "confidence": 0.97,
+    "extractedFields": {}
+  },
+  "modelUsed": "gpt-4o-mini",
+  "latencyMs": 890
+}
+```
+
+---
+
+### 17.10 Telemetry
+
+**AI-Specific Events** (extend §5 telemetry):
+
+| Event Name                    | Properties                                               | Trigger                                  |
+|-------------------------------|----------------------------------------------------------|------------------------------------------|
+| `reops.ai.schema_validated`   | `{modelId, task, schemaName, ok:boolean, ms}`            | After Zod validation                     |
+| `reops.ai.retry_invoked`      | `{modelId, task, attemptNumber, reason, ms}`             | Fallback/retry triggered                 |
+| `reops.ai.citation_added`     | `{modelId, caseId, articleId, citationCount}`            | Draft includes KB citations              |
+| `reops.ai.citation_broken`    | `{articleId, url, caseId}`                               | Citation URL returns 404                 |
+| `reops.ai.fallback_model`     | `{primaryModel, fallbackModel, reason}`                  | Switched to fallback due to failure      |
+| `reops.ai.toxicity_detected`  | `{messageId, score, action}`                             | Content moderation flags message         |
+| `reops.ai.kb_match_found`     | `{caseId, articleIds:[], matchScore}`                    | KB search returns matches                |
+| `reops.ai.no_kb_match`        | `{caseId, intent, flagged:boolean}`                      | No KB articles found; `needs_article_seed` |
+| `reops.ai.eval_run_complete`  | `{evalRunId, passed, failed, metrics:{}}`                | Eval harness finishes                    |
+
+**Example Telemetry Call**:
+```typescript
+telemetry.track('reops.ai.schema_validated', {
+  modelId: 'gpt-4o-mini',
+  task: 'classify',
+  schemaName: 'ClassificationResult',
+  ok: true,
+  ms: 1120
+});
+```
+
+---
+
+### 17.11 i18n (EN/AR)
+
+**English**:
+```json
+{
+  "ai.banner.refusal": "This message requires human review due to policy constraints.",
+  "ai.citation.label": "Reference",
+  "ai.citation.missing": "No knowledge base article found. Flagged for review.",
+  "ai.retry.toast": "AI processing delayed. Retrying with alternate model...",
+  "ai.draft.requiresReview": "Draft requires manager approval",
+  "ai.toxicity.warning": "Message flagged for review due to content policy",
+  "ai.fallback.macro": "Automated response unavailable. Using template reply.",
+  "ai.pii.redacted": "Some details are hidden. Managers can view full information.",
+  "ai.reasoning.viewTrace": "View AI reasoning",
+  "ai.kb.seedPrompt": "Create KB article from this draft",
+  "ai.model.timeout": "AI response timed out. Case routed to human agent."
+}
+```
+
+**Arabic**:
+```json
+{
+  "ai.banner.refusal": "هذه الرسالة تتطلب مراجعة بشرية بسبب قيود السياسة.",
+  "ai.citation.label": "مرجع",
+  "ai.citation.missing": "لم يتم العثور على مقال في قاعدة المعرفة. تم وضع علامة للمراجعة.",
+  "ai.retry.toast": "تأخر معالجة الذكاء الاصطناعي. إعادة المحاولة بنموذج بديل...",
+  "ai.draft.requiresReview": "المسودة تتطلب موافقة المدير",
+  "ai.toxicity.warning": "تم وضع علامة على الرسالة للمراجعة بسبب سياسة المحتوى",
+  "ai.fallback.macro": "الرد التلقائي غير متاح. استخدام رد نموذجي.",
+  "ai.pii.redacted": "بعض التفاصيل مخفية. يمكن للمديرين عرض المعلومات الكاملة.",
+  "ai.kb.seedPrompt": "إنشاء مقال في قاعدة المعرفة من هذه المسودة",
+  "ai.model.timeout": "انتهت مهلة استجابة الذكاء الاصطناعي. تم توجيه الحالة إلى وكيل بشري."
+}
+```
+
+---
+
+### 17.12 Acceptance Criteria
+
+- [ ] Model registry JSON loaded on server start with 4+ models (OpenAI, Anthropic, Google)
+- [ ] Selection policy maps 5 tasks (classifier, router, draft, rewrite, extract) to primary + 2 fallback models
+- [ ] All 6 Zod schemas (Classification, Routing, Draft, Citation, PolicyCheck, Extraction) validate against sample JSON
+- [ ] ClassificationResult schema rejects invalid intent enum value (e.g., "unknown_intent")
+- [ ] DraftReply schema requires ≥1 citation; validation fails if citations=[]
+- [ ] ExtractionResult accepts null for all optional fields (amountUSD, studentId, etc.)
+- [ ] Classifier prompt includes 3 few-shot examples (Admissions, Finance, Registrar)
+- [ ] Router prompt calculates SLA from department + urgency (Finance high urgency = 24h)
+- [ ] Draft Composer prompt uses {{student.name}} and {{policy.ref}} placeholders
+- [ ] Draft Composer generates ≥1 citation for policy question; flags `needs_article_seed` if 0 citations
+- [ ] Rewrite prompt simplifies B2 reading level (avg sentence ≤20 words)
+- [ ] Rewrite prompt note mentions Arabic RTL compatibility
+- [ ] Extractor prompt outputs strict JSON with no prose
+- [ ] Extractor retry includes repair hint: "Ensure string values quoted, dates ISO 8601"
+- [ ] Pre-redaction masks email to `j***@example.com` for Agent role
+- [ ] Pre-redaction masks studentId to `S****567` for Agent role
+- [ ] Manager/Admin toggle "Show PII" logs `audit.pii_view_toggled` event
+- [ ] Toxicity score >0.75 triggers `refusal.toxic_content` template + Manager escalation
+- [ ] Blocklist match (e.g., "fraud") triggers refusal + human review
+- [ ] ReasoningTrace logs `decisionId`, `inputsHash`, `outputsHash`, `modelId`, `latencyMs` (NO raw PII)
+- [ ] Reasoning trace stored in `reasoning_traces` table with 90-day retention
+- [ ] Draft with 0 citations for policy query sets `requiresManagerReview=true` + flags `needs_article_seed`
+- [ ] Manager clicks "Create KB Article" → pre-filled form with draft content (§15 integration)
+- [ ] Citation URL validation (HEAD request) flags broken links with `reops.ai.citation_broken`
+- [ ] Timeout (>timeoutMs) → uses macro fallback, no retry
+- [ ] Schema validation fail → single retry with `repair_prompt`
+- [ ] Rate limit (429) → switches to alt model + exponential backoff (2^n seconds), max 2 retries
+- [ ] JSON parse error → retry with repair hint, max 1 retry
+- [ ] Golden test set: 50 intents, 40 drafts, 30 extractions with ground truth
+- [ ] Eval metrics: accuracy, schema pass rate, citation rate, p95 latency
+- [ ] Eval harness runs on CI for AI-related PRs; blocks merge if regression >5%
+- [ ] Sample eval aggregate JSON includes `{accuracy, schemaPassRate, citationRate, p95Latency, fallbackRate}`
+- [ ] POST /api/ai/classify returns ClassificationResult + modelUsed + latencyMs
+- [ ] POST /api/ai/route returns RoutingDecision with ≤3 relatedPolicyIds
+- [ ] POST /api/ai/draft includes ≥1 citation in response
+- [ ] POST /api/ai/extract returns ExtractionResult with null fields if not found
+- [ ] Error 408 MODEL_TIMEOUT returned if model exceeds timeoutMs
+- [ ] Error 422 SCHEMA_MISMATCH returned if Zod validation fails after retry
+- [ ] Error 404 NO_KB_MATCH returned if no KB articles found for policy query
+- [ ] Telemetry event `reops.ai.schema_validated` fires with {modelId, task, ok, ms}
+- [ ] Telemetry event `reops.ai.retry_invoked` fires on fallback with {attemptNumber, reason}
+- [ ] Telemetry event `reops.ai.citation_added` fires with {articleId, citationCount}
+- [ ] Telemetry event `reops.ai.no_kb_match` fires with {caseId, intent, flagged:true}
+- [ ] i18n key `ai.banner.refusal` displayed when toxicity detected
+- [ ] i18n key `ai.citation.label` renders "Reference" (EN) / "مرجع" (AR) in draft UI
+- [ ] i18n key `ai.retry.toast` shown during fallback retry
+- [ ] All AI endpoints (classify, route, draft, rewrite, extract) return 200 OK with valid schema on success
+
+---
+
+END §17
+
+---
+
+## 18. Type Definitions
+
+### 18.1 Enums
+
+```typescript
+// Department (aligned with §4 data model)
+export enum Department {
+  ADMISSIONS = 'admissions',
+  FINANCE = 'finance',
+  REGISTRAR = 'registrar',
+  IT_SUPPORT = 'it_support',
+  STUDENT_AFFAIRS = 'student_affairs',
+  GENERAL = 'general'
+}
+
+// Role (RLS policies §4)
+export enum Role {
+  AGENT = 'agent',
+  MANAGER = 'manager',
+  ADMIN = 'admin'
+}
+
+// Case Status
+export enum CaseStatus {
+  OPEN = 'open',
+  PENDING = 'pending',
+  RESOLVED = 'resolved',
+  CLOSED = 'closed',
+  SPAM = 'spam'
+}
+
+// Priority
+export enum Priority {
+  LOW = 'low',
+  MEDIUM = 'medium',
+  HIGH = 'high',
+  URGENT = 'urgent'
+}
+
+// Channel (inbox sources §9)
+export enum Channel {
+  EMAIL = 'email',
+  WHATSAPP = 'whatsapp',
+  WEBCHAT = 'webchat',
+  STUDENT_PORTAL = 'student_portal'
+}
+
+// Locale (i18n §11)
+export enum Locale {
+  EN = 'en',
+  AR = 'ar'
+}
+
+// SLA Risk (§12)
+export enum SLARisk {
+  ON_TRACK = 'on_track',
+  AT_RISK = 'at_risk',
+  BREACHED = 'breached'
+}
+```
+
+---
+
+### 18.2 Core Types
+
+```typescript
+// User (from users table §4)
+export interface User {
+  readonly id: string;
+  readonly email: string;
+  readonly name: string;
+  readonly role: Role;
+  readonly department: Department | null;
+  readonly locale: Locale;
+  readonly avatarUrl: string | null;
+  readonly createdAt: string; // ISO 8601
+  readonly updatedAt: string;
+}
+
+// StudentProfile (from students table §4)
+export interface StudentProfile {
+  readonly id: string;
+  readonly studentId: string; // e.g., S2024-3456
+  readonly name: string;
+  readonly email: string;
+  readonly phone: string | null;
+  readonly nationalId: string | null;
+  readonly enrollmentStatus: 'active' | 'inactive' | 'graduated' | 'suspended';
+  readonly programCode: string | null;
+  readonly createdAt: string;
+  readonly updatedAt: string;
+}
+
+// Case (from cases table §4)
+export interface Case {
+  readonly id: string;
+  readonly subject: string;
+  readonly status: CaseStatus;
+  readonly priority: Priority;
+  readonly channel: Channel;
+  readonly studentId: string | null;
+  readonly assigneeId: string | null;
+  readonly department: Department;
+  readonly tags: string[];
+  readonly slaDeadline: string | null; // ISO 8601
+  readonly slaRisk: SLARisk;
+  readonly createdAt: string;
+  readonly updatedAt: string;
+  readonly resolvedAt: string | null;
+  readonly closedAt: string | null;
+}
+
+// SLA (from sla_configs table §4)
+export interface SLA {
+  readonly id: string;
+  readonly department: Department;
+  readonly priority: Priority;
+  readonly responseTimeHours: number;
+  readonly resolutionTimeHours: number;
+  readonly isActive: boolean;
+  readonly createdAt: string;
+  readonly updatedAt: string;
+}
+
+// Message (from messages table §4)
+export interface Message {
+  readonly id: string;
+  readonly caseId: string;
+  readonly senderId: string | null; // null for student messages
+  readonly senderType: 'agent' | 'student' | 'system';
+  readonly body: string;
+  readonly attachments: Attachment[];
+  readonly isInternal: boolean;
+  readonly createdAt: string;
+}
+
+export interface Attachment {
+  readonly id: string;
+  readonly fileName: string;
+  readonly fileSize: number; // bytes
+  readonly mimeType: string;
+  readonly url: string;
+}
+
+// Queue (from queues table §4)
+export interface Queue {
+  readonly id: string;
+  readonly name: string;
+  readonly department: Department;
+  readonly filterRules: Record<string, any>; // JSON filter criteria
+  readonly assignmentStrategy: 'round_robin' | 'load_balanced' | 'manual';
+  readonly isActive: boolean;
+  readonly createdAt: string;
+  readonly updatedAt: string;
+}
+
+// Article (from articles table §4, KM §15)
+export interface Article {
+  readonly id: string;
+  readonly title: string;
+  readonly slug: string;
+  readonly content: string; // Markdown
+  readonly categoryId: string;
+  readonly authorId: string;
+  readonly status: 'draft' | 'published' | 'archived';
+  readonly locale: Locale;
+  readonly viewCount: number;
+  readonly helpfulCount: number;
+  readonly tags: string[];
+  readonly createdAt: string;
+  readonly updatedAt: string;
+  readonly publishedAt: string | null;
+}
+
+// FormSchema (custom fields §13)
+export interface FormSchema {
+  readonly id: string;
+  readonly name: string;
+  readonly department: Department;
+  readonly fields: FormField[];
+  readonly isActive: boolean;
+  readonly createdAt: string;
+  readonly updatedAt: string;
+}
+
+export interface FormField {
+  readonly id: string;
+  readonly label: string;
+  readonly type: 'text' | 'number' | 'email' | 'select' | 'multiselect' | 'date' | 'textarea';
+  readonly required: boolean;
+  readonly options?: string[]; // for select/multiselect
+  readonly validation?: Record<string, any>;
+}
+
+// Workflow (automation §14)
+export interface Workflow {
+  readonly id: string;
+  readonly name: string;
+  readonly trigger: WorkflowTrigger;
+  readonly conditions: WorkflowCondition[];
+  readonly actions: WorkflowAction[];
+  readonly isActive: boolean;
+  readonly createdAt: string;
+  readonly updatedAt: string;
+}
+
+export interface WorkflowTrigger {
+  readonly type: 'case_created' | 'case_updated' | 'message_received' | 'sla_at_risk';
+  readonly filters?: Record<string, any>;
+}
+
+export interface WorkflowCondition {
+  readonly field: string;
+  readonly operator: 'equals' | 'contains' | 'greater_than' | 'less_than';
+  readonly value: any;
+}
+
+export interface WorkflowAction {
+  readonly type: 'assign' | 'set_priority' | 'add_tag' | 'send_email' | 'create_task';
+  readonly params: Record<string, any>;
+}
+```
+
+---
+
+### 18.3 API Helpers
+
+```typescript
+// Standard API Error
+export interface ApiError {
+  readonly code: string; // e.g., "MODEL_TIMEOUT", "UNAUTHORIZED"
+  readonly message: string;
+  readonly details?: Record<string, any>;
+  readonly timestamp: string; // ISO 8601
+}
+
+// Generic API Response Wrapper
+export interface ApiResponse<T> {
+  readonly data: T;
+  readonly meta?: {
+    requestId: string;
+    latencyMs: number;
+  };
+}
+
+// Paginated Response
+export interface Paginated<T> {
+  readonly items: T[];
+  readonly total: number;
+  readonly page: number;
+  readonly pageSize: number;
+  readonly hasMore: boolean;
+}
+
+// List Query Parameters
+export interface ListQuery {
+  readonly page?: number;
+  readonly pageSize?: number;
+  readonly search?: string;
+  readonly filters?: Record<string, any>;
+  readonly sort?: Sort[];
+}
+
+export interface Sort {
+  readonly field: string;
+  readonly direction: 'asc' | 'desc';
+}
+
+// Idempotency Key (for POST/PUT operations)
+export type IdempotencyKey = string & { readonly __brand: 'IdempotencyKey' };
+
+export function createIdempotencyKey(): IdempotencyKey {
+  return `idem_${Date.now()}_${Math.random().toString(36).slice(2)}` as IdempotencyKey;
+}
+```
+
+---
+
+### 18.4 Telemetry Event Map
+
+```typescript
+// Typed event map for telemetry (§5)
+export type TelemetryEventMap = {
+  // Inbox events (§9)
+  'reops.inbox.message_received': {
+    channel: Channel;
+    caseId: string;
+    studentId?: string;
+  };
+  'reops.inbox.case_created': {
+    caseId: string;
+    department: Department;
+    priority: Priority;
+    channel: Channel;
+  };
+  'reops.inbox.case_assigned': {
+    caseId: string;
+    assigneeId: string;
+    assignedBy: string;
+  };
+  'reops.inbox.case_resolved': {
+    caseId: string;
+    resolutionTimeMs: number;
+    slaBreached: boolean;
+  };
+  'reops.inbox.filter_applied': {
+    filterId: string;
+    resultsCount: number;
+  };
+
+  // Manager events (§11, §12)
+  'reops.manager.team_view_loaded': {
+    department: Department;
+    agentCount: number;
+  };
+  'reops.manager.case_reassigned': {
+    caseId: string;
+    fromAgentId: string;
+    toAgentId: string;
+  };
+  'reops.manager.sla_config_updated': {
+    department: Department;
+    priority: Priority;
+    responseTimeHours: number;
+  };
+  'reops.manager.report_exported': {
+    reportType: string;
+    format: 'csv' | 'json' | 'pdf';
+    rowCount: number;
+  };
+
+  // Admin events (§16)
+  'reops.admin.user_created': {
+    userId: string;
+    role: Role;
+    department: Department | null;
+  };
+  'reops.admin.role_changed': {
+    userId: string;
+    oldRole: Role;
+    newRole: Role;
+  };
+  'reops.admin.audit_query_run': {
+    actorFilter?: string;
+    eventTypeFilter?: string;
+    resultsCount: number;
+  };
+  'reops.admin.audit_export_requested': {
+    format: 'csv' | 'json';
+    includePII: boolean;
+  };
+  'reops.admin.pii_view_toggled': {
+    userId: string;
+    caseId: string;
+    shown: boolean;
+  };
+
+  // Knowledge Management events (§15)
+  'reops.km.article_viewed': {
+    articleId: string;
+    viewerId: string | null;
+    source: 'search' | 'link' | 'ai_citation';
+  };
+  'reops.km.article_helpful': {
+    articleId: string;
+    helpful: boolean;
+  };
+  'reops.km.search_performed': {
+    query: string;
+    resultsCount: number;
+    locale: Locale;
+  };
+  'reops.km.article_created': {
+    articleId: string;
+    authorId: string;
+    categoryId: string;
+  };
+  'reops.km.article_published': {
+    articleId: string;
+    locale: Locale;
+  };
+
+  // AI events (§17)
+  'reops.ai.schema_validated': {
+    modelId: string;
+    task: 'classify' | 'route' | 'draft' | 'rewrite' | 'extract';
+    schemaName: string;
+    ok: boolean;
+    ms: number;
+  };
+  'reops.ai.retry_invoked': {
+    modelId: string;
+    task: string;
+    attemptNumber: number;
+    reason: string;
+    ms: number;
+  };
+  'reops.ai.citation_added': {
+    modelId: string;
+    caseId: string;
+    articleId: string;
+    citationCount: number;
+  };
+  'reops.ai.citation_broken': {
+    articleId: string;
+    url: string;
+    caseId: string;
+  };
+  'reops.ai.fallback_model': {
+    primaryModel: string;
+    fallbackModel: string;
+    reason: string;
+  };
+  'reops.ai.toxicity_detected': {
+    messageId: string;
+    score: number;
+    action: 'refuse' | 'escalate';
+  };
+  'reops.ai.kb_match_found': {
+    caseId: string;
+    articleIds: string[];
+    matchScore: number;
+  };
+  'reops.ai.no_kb_match': {
+    caseId: string;
+    intent: string;
+    flagged: boolean;
+  };
+  'reops.ai.eval_run_complete': {
+    evalRunId: string;
+    passed: number;
+    failed: number;
+    metrics: Record<string, any>;
+  };
+
+  // Audit events
+  'reops.audit.event_logged': {
+    eventType: string;
+    actorId: string;
+    entityType: string;
+    entityId: string;
+  };
+  'reops.audit.retention_policy_applied': {
+    deletedCount: number;
+    retentionDays: number;
+  };
+};
+
+// Type-safe telemetry tracker
+export interface TelemetryTracker {
+  track<K extends keyof TelemetryEventMap>(
+    eventName: K,
+    properties: TelemetryEventMap[K]
+  ): void;
+}
+```
+
+---
+
+### 18.5 AI Schemas
+
+```typescript
+import { z } from 'zod';
+
+// Re-export Zod schemas from §17
+export {
+  ClassificationResultSchema,
+  RoutingDecisionSchema,
+  DraftReplySchema,
+  CitationSchema,
+  PolicyCheckResultSchema,
+  ExtractionResultSchema
+} from './ai-schemas'; // §17.2
+
+// Type-safe parse helper
+export interface ParseResult<T> {
+  success: boolean;
+  data?: T;
+  error?: z.ZodError;
+}
+
+export function parseSafe<T>(
+  schema: z.ZodSchema<T>,
+  data: unknown
+): ParseResult<T> {
+  const result = schema.safeParse(data);
+
+  if (result.success) {
+    return {
+      success: true,
+      data: result.data
+    };
+  }
+
+  return {
+    success: false,
+    error: result.error
+  };
+}
+
+// Example usage:
+// const result = parseSafe(ClassificationResultSchema, unknownData);
+// if (result.success) {
+//   console.log(result.data.intent);
+// } else {
+//   console.error(result.error.flatten());
+// }
+```
+
+---
+
+### 18.6 i18n Keyspace
+
+```typescript
+// Complete i18n key union (EN/AR §11, §15, §17)
+export type I18nKey =
+  // Common
+  | 'common.save'
+  | 'common.cancel'
+  | 'common.delete'
+  | 'common.edit'
+  | 'common.search'
+  | 'common.loading'
+  | 'common.error'
+  | 'common.success'
+
+  // Inbox (§9)
+  | 'inbox.title'
+  | 'inbox.newCase'
+  | 'inbox.myQueue'
+  | 'inbox.allCases'
+  | 'inbox.filters.department'
+  | 'inbox.filters.priority'
+  | 'inbox.filters.status'
+  | 'inbox.case.assign'
+  | 'inbox.case.resolve'
+  | 'inbox.case.close'
+
+  // Case detail (§10)
+  | 'case.title'
+  | 'case.student'
+  | 'case.priority'
+  | 'case.status'
+  | 'case.sla.deadline'
+  | 'case.sla.risk'
+  | 'case.reply.placeholder'
+  | 'case.reply.send'
+  | 'case.internalNote'
+  | 'case.history.title'
+
+  // Manager (§11, §12)
+  | 'manager.dashboard.title'
+  | 'manager.team.performance'
+  | 'manager.reports.export'
+  | 'manager.sla.configure'
+  | 'manager.queue.manage'
+
+  // Admin (§16)
+  | 'admin.users.title'
+  | 'admin.users.create'
+  | 'admin.audit.title'
+  | 'admin.audit.filter.actor'
+  | 'admin.audit.export.csv'
+  | 'admin.pii.show'
+
+  // Knowledge Base (§15)
+  | 'kb.title'
+  | 'kb.search.placeholder'
+  | 'kb.article.helpful'
+  | 'kb.article.create'
+  | 'kb.category.title'
+
+  // AI (§17)
+  | 'ai.banner.refusal'
+  | 'ai.citation.label'
+  | 'ai.citation.missing'
+  | 'ai.retry.toast'
+  | 'ai.draft.requiresReview'
+  | 'ai.toxicity.warning'
+  | 'ai.fallback.macro'
+  | 'ai.pii.redacted'
+  | 'ai.reasoning.viewTrace'
+  | 'ai.kb.seedPrompt'
+  | 'ai.model.timeout';
+
+// Translation map structure
+export type TranslationMap = Record<I18nKey, string>;
+
+// Build-time validation: ensure all keys exist in both EN and AR
+export function validateTranslations(
+  en: Partial<TranslationMap>,
+  ar: Partial<TranslationMap>
+): { missingEN: I18nKey[]; missingAR: I18nKey[] } {
+  const allKeys: I18nKey[] = [
+    'common.save', 'common.cancel', 'common.delete', /* ... all keys */
+  ];
+
+  const missingEN = allKeys.filter(key => !(key in en));
+  const missingAR = allKeys.filter(key => !(key in ar));
+
+  return { missingEN, missingAR };
+}
+
+// Type-safe translation function
+export function t(key: I18nKey, locale: Locale, vars?: Record<string, string>): string {
+  // Implementation in §11
+  return '';
+}
+```
+
+---
+
+### 18.7 Versioning
+
+```typescript
+// Type schema version (semantic versioning)
+export const TYPE_VERSION = '1.0.0' as const;
+
+// Example: deprecated enum value with JSDoc tag
+export enum LegacyStatus {
+  ACTIVE = 'active',
+  INACTIVE = 'inactive',
+
+  /**
+   * @deprecated Use CaseStatus.CLOSED instead. Will be removed in v2.0.0
+   */
+  ARCHIVED = 'archived'
+}
+
+// Breaking change guard
+export type TypeVersionGuard = typeof TYPE_VERSION extends '1.0.0'
+  ? true
+  : 'Type definitions version mismatch - update imports';
+
+// Runtime version check
+export function assertTypeVersion(expected: string): void {
+  if (TYPE_VERSION !== expected) {
+    throw new Error(
+      `Type version mismatch: expected ${expected}, got ${TYPE_VERSION}`
+    );
+  }
+}
+```
+
+---
+
+### 18.8 Acceptance Criteria
+
+- [ ] All enums (Department, Role, CaseStatus, Priority, Channel, Locale, SLARisk) match §4 database schema
+- [ ] Core types (User, Case, Message, Article, etc.) use `readonly` for stable fields
+- [ ] StudentProfile.studentId pattern validated in application layer (S\d{4}-\d{4})
+- [ ] ApiResponse<T> generic wrapper supports typed data payload
+- [ ] Paginated<T> includes total, page, pageSize, hasMore fields
+- [ ] IdempotencyKey branded type prevents accidental string usage
+- [ ] TelemetryEventMap includes typed events for all modules (inbox, manager, admin, km, ai, audit)
+- [ ] TelemetryTracker.track() enforces type-safe event name + properties matching
+- [ ] parseSafe<T>() returns ParseResult with success flag + data/error union
+- [ ] I18nKey union includes keys from §9, §10, §11, §15, §16, §17
+- [ ] validateTranslations() build-time check detects missing EN/AR keys
+- [ ] TYPE_VERSION constant set to '1.0.0'
+- [ ] @deprecated JSDoc tag example shown on LegacyStatus.ARCHIVED with removal version
+- [ ] All core types align with Supabase table schemas from §4 (no drift)
+
+---
+
+END §18
+
+---
+
+## 19. API Contracts (Stub)
+
+### 19.1 Conventions
+
+**Headers**:
+```http
+Idempotency-Key: idem_1698765432_abc123def
+Accept: application/json
+Content-Type: application/json
+Authorization: Bearer <JWT_TOKEN>
+X-Request-ID: req_xyz789  # auto-generated if missing
+```
+
+**Pagination** (query params):
+```
+?page=1&perPage=25
+```
+
+**Sort** (query params):
+```
+?sort=createdAt:desc,priority:asc
+```
+
+**Standard Error Shape**:
+```json
+{
+  "code": "VALIDATION_ERROR",
+  "message": "Invalid case status transition",
+  "details": {
+    "field": "status",
+    "currentValue": "resolved",
+    "attemptedValue": "open",
+    "constraint": "Cannot reopen resolved case without manager approval"
+  },
+  "timestamp": "2024-10-20T14:32:18Z"
+}
+```
+
+**HTTP Status Codes**:
+- `200 OK`: Successful GET/PATCH
+- `201 Created`: Successful POST
+- `204 No Content`: Successful DELETE
+- `400 Bad Request`: Validation error
+- `401 Unauthorized`: Missing/invalid token
+- `403 Forbidden`: Insufficient permissions
+- `404 Not Found`: Resource not found
+- `409 Conflict`: State conflict (e.g., invalid transition)
+- `422 Unprocessable Entity`: Schema validation failed
+- `429 Too Many Requests`: Rate limit exceeded
+- `500 Internal Server Error`: Server error
+
+---
+
+### 19.2 Cases
+
+#### **GET /api/cases**
+
+Query params: `page`, `perPage`, `sort`, `status`, `department`, `assigneeId`, `priority`, `search`
+
+**Request**:
+```http
+GET /api/cases?page=1&perPage=25&status=open&department=finance&sort=slaDeadline:asc
+```
+
+**Response (200 OK)**:
+```json
+{
+  "data": {
+    "items": [
+      {
+        "id": "case_abc123",
+        "subject": "Tuition payment inquiry",
+        "status": "open",
+        "priority": "high",
+        "channel": "email",
+        "studentId": "S2024-3456",
+        "assigneeId": "agent_finance_002",
+        "department": "finance",
+        "tags": ["payment", "tuition"],
+        "slaDeadline": "2024-10-21T16:00:00Z",
+        "slaRisk": "at_risk",
+        "createdAt": "2024-10-20T10:15:00Z",
+        "updatedAt": "2024-10-20T14:30:00Z",
+        "resolvedAt": null,
+        "closedAt": null
+      }
+    ],
+    "total": 142,
+    "page": 1,
+    "pageSize": 25,
+    "hasMore": true
+  },
+  "meta": {
+    "requestId": "req_xyz789",
+    "latencyMs": 45
+  }
+}
+```
+
+---
+
+#### **POST /api/cases**
+
+**Request**:
+```json
+{
+  "subject": "Need transcript urgently",
+  "channel": "webchat",
+  "studentId": "S2024-7890",
+  "department": "registrar",
+  "priority": "high",
+  "initialMessage": "I need my transcript for visa application by Friday.",
+  "tags": ["transcript", "urgent"]
+}
+```
+
+**Response (201 Created)**:
+```json
+{
+  "data": {
+    "id": "case_def456",
+    "subject": "Need transcript urgently",
+    "status": "open",
+    "priority": "high",
+    "channel": "webchat",
+    "studentId": "S2024-7890",
+    "assigneeId": null,
+    "department": "registrar",
+    "tags": ["transcript", "urgent"],
+    "slaDeadline": "2024-10-22T16:00:00Z",
+    "slaRisk": "on_track",
+    "createdAt": "2024-10-20T14:45:00Z",
+    "updatedAt": "2024-10-20T14:45:00Z",
+    "resolvedAt": null,
+    "closedAt": null
+  },
+  "meta": {
+    "requestId": "req_abc123",
+    "latencyMs": 120
+  }
+}
+```
+
+---
+
+#### **GET /api/cases/:id**
+
+**Response (200 OK)**:
+```json
+{
+  "data": {
+    "id": "case_abc123",
+    "subject": "Tuition payment inquiry",
+    "status": "open",
+    "priority": "high",
+    "channel": "email",
+    "studentId": "S2024-3456",
+    "student": {
+      "id": "student_123",
+      "studentId": "S2024-3456",
+      "name": "Ahmed Hassan",
+      "email": "ahmed.hassan@example.com",
+      "enrollmentStatus": "active"
+    },
+    "assigneeId": "agent_finance_002",
+    "assignee": {
+      "id": "agent_finance_002",
+      "name": "Sara Al-Mansoori",
+      "email": "sara@reops.example",
+      "department": "finance"
+    },
+    "department": "finance",
+    "tags": ["payment", "tuition"],
+    "slaDeadline": "2024-10-21T16:00:00Z",
+    "slaRisk": "at_risk",
+    "messages": [
+      {
+        "id": "msg_001",
+        "caseId": "case_abc123",
+        "senderId": null,
+        "senderType": "student",
+        "body": "Can I pay my tuition in installments?",
+        "attachments": [],
+        "isInternal": false,
+        "createdAt": "2024-10-20T10:15:00Z"
+      }
+    ],
+    "createdAt": "2024-10-20T10:15:00Z",
+    "updatedAt": "2024-10-20T14:30:00Z",
+    "resolvedAt": null,
+    "closedAt": null
+  }
+}
+```
+
+---
+
+#### **PATCH /api/cases/:id**
+
+**Valid Transition Example (200 OK)**:
+```json
+// Request
+{
+  "status": "resolved",
+  "resolutionNote": "Provided installment plan information and form link."
+}
+
+// Response
+{
+  "data": {
+    "id": "case_abc123",
+    "status": "resolved",
+    "resolvedAt": "2024-10-20T15:00:00Z",
+    "updatedAt": "2024-10-20T15:00:00Z"
+  }
+}
+```
+
+**Invalid Transition Example (400 Bad Request)**:
+```json
+// Request
+{
+  "status": "spam"
+}
+
+// Response
+{
+  "code": "VALIDATION_ERROR",
+  "message": "Cannot mark assigned case as spam",
+  "details": {
+    "field": "status",
+    "constraint": "Only unassigned cases can be marked as spam"
+  },
+  "timestamp": "2024-10-20T15:05:00Z"
+}
+```
+
+**State Conflict Example (409 Conflict)**:
+```json
+// Request (attempting to reopen resolved case)
+{
+  "status": "open"
+}
+
+// Response
+{
+  "code": "STATE_CONFLICT",
+  "message": "Cannot transition from 'resolved' to 'open'",
+  "details": {
+    "currentStatus": "resolved",
+    "attemptedStatus": "open",
+    "allowedTransitions": ["closed"],
+    "managerOverride": "required"
+  },
+  "timestamp": "2024-10-20T15:10:00Z"
+}
+```
+
+---
+
+#### **POST /api/cases/:id/merge**
+
+Merge multiple cases into parent case.
+
+**Request**:
+```json
+{
+  "childIds": ["case_def456", "case_ghi789"],
+  "mergeReason": "Duplicate inquiries from same student about transcript request"
+}
+```
+
+**Response (200 OK)**:
+```json
+{
+  "data": {
+    "parentId": "case_abc123",
+    "mergedIds": ["case_def456", "case_ghi789"],
+    "undoToken": "undo_merge_xyz123",
+    "mergedAt": "2024-10-20T15:20:00Z"
+  }
+}
+```
+
+**Conflict Example (409 Conflict)**:
+```json
+{
+  "code": "MERGE_CONFLICT",
+  "message": "Cannot merge cases from different departments",
+  "details": {
+    "parentDepartment": "registrar",
+    "conflictingCases": {
+      "case_def456": "finance"
+    }
+  },
+  "timestamp": "2024-10-20T15:22:00Z"
+}
+```
+
+---
+
+#### **POST /api/cases/:id/split**
+
+Split messages from a case into new case.
+
+**Request**:
+```json
+{
+  "messageIds": ["msg_005", "msg_006", "msg_007"],
+  "newSubject": "Payment plan inquiry (split from original case)",
+  "department": "finance",
+  "reason": "Student raised separate payment question in transcript thread"
+}
+```
+
+**Response (201 Created)**:
+```json
+{
+  "data": {
+    "originalCaseId": "case_abc123",
+    "newCaseId": "case_jkl012",
+    "movedMessageIds": ["msg_005", "msg_006", "msg_007"],
+    "splitAt": "2024-10-20T15:30:00Z"
+  }
+}
+```
+
+---
+
+### 19.3 Manager
+
+#### **GET /api/manager/overview**
+
+Department-level overview (§11, §12).
+
+**Request**:
+```http
+GET /api/manager/overview?department=finance
+```
+
+**Response (200 OK)**:
+```json
+{
+  "data": {
+    "department": "finance",
+    "metrics": {
+      "openCases": 42,
+      "casesAtRisk": 8,
+      "casesBreached": 2,
+      "avgResolutionTimeHours": 18.5,
+      "slaComplianceRate": 0.94
+    },
+    "agentPerformance": [
+      {
+        "agentId": "agent_finance_002",
+        "name": "Sara Al-Mansoori",
+        "assignedCases": 12,
+        "resolvedToday": 5,
+        "avgResponseTimeMinutes": 24,
+        "slaCompliance": 0.96
+      }
+    ],
+    "queueStats": [
+      {
+        "queueId": "queue_finance_001",
+        "name": "Finance - High Priority",
+        "pending": 8,
+        "slaRiskDistribution": {
+          "on_track": 5,
+          "at_risk": 2,
+          "breached": 1
+        }
+      }
+    ]
+  }
+}
+```
+
+---
+
+#### **POST /api/queues/rebalance**
+
+Rebalance case assignments across agents (idempotent).
+
+**Request**:
+```json
+{
+  "queueId": "queue_finance_001",
+  "strategy": "load_balanced"
+}
+```
+
+**Response (200 OK)**:
+```json
+{
+  "data": {
+    "queueId": "queue_finance_001",
+    "reassignedCount": 6,
+    "assignments": [
+      {
+        "caseId": "case_abc123",
+        "fromAgentId": "agent_finance_001",
+        "toAgentId": "agent_finance_002"
+      }
+    ],
+    "balancedAt": "2024-10-20T16:00:00Z"
+  }
+}
+```
+
+**Conflict Example (409 Conflict)** - queue already rebalancing:
+```json
+{
+  "code": "REBALANCE_IN_PROGRESS",
+  "message": "Queue rebalance already in progress",
+  "details": {
+    "queueId": "queue_finance_001",
+    "startedAt": "2024-10-20T15:58:00Z",
+    "estimatedCompletionSec": 45
+  },
+  "timestamp": "2024-10-20T16:00:30Z"
+}
+```
+
+---
+
+### 19.4 Admin
+
+#### **GET /api/admin/users**
+
+List users (§16).
+
+**Response (200 OK)**:
+```json
+{
+  "data": {
+    "items": [
+      {
+        "id": "user_001",
+        "email": "sara@reops.example",
+        "name": "Sara Al-Mansoori",
+        "role": "agent",
+        "department": "finance",
+        "locale": "en",
+        "createdAt": "2024-09-01T10:00:00Z"
+      }
+    ],
+    "total": 24,
+    "page": 1,
+    "pageSize": 25,
+    "hasMore": false
+  }
+}
+```
+
+---
+
+#### **POST /api/admin/users**
+
+Create user.
+
+**Request**:
+```json
+{
+  "email": "ahmed@reops.example",
+  "name": "Ahmed Ibrahim",
+  "role": "agent",
+  "department": "registrar",
+  "locale": "ar"
+}
+```
+
+**Response (201 Created)**:
+```json
+{
+  "data": {
+    "id": "user_025",
+    "email": "ahmed@reops.example",
+    "name": "Ahmed Ibrahim",
+    "role": "agent",
+    "department": "registrar",
+    "locale": "ar",
+    "createdAt": "2024-10-20T16:15:00Z"
+  }
+}
+```
+
+---
+
+#### **POST /api/admin/forms**
+
+Create custom form schema (§13).
+
+**Request**:
+```json
+{
+  "name": "Finance - Scholarship Application",
+  "department": "finance",
+  "fields": [
+    {
+      "label": "GPA",
+      "type": "number",
+      "required": true,
+      "validation": {"min": 0, "max": 4.0}
+    },
+    {
+      "label": "Scholarship Type",
+      "type": "select",
+      "required": true,
+      "options": ["Merit", "Need-Based", "Athletic"]
+    }
+  ]
+}
+```
+
+**Response (201 Created)**:
+```json
+{
+  "data": {
+    "id": "form_001",
+    "name": "Finance - Scholarship Application",
+    "department": "finance",
+    "isActive": true,
+    "createdAt": "2024-10-20T16:20:00Z"
+  }
+}
+```
+
+---
+
+#### **POST /api/admin/workflows**
+
+Create automation workflow (§14).
+
+**Request**:
+```json
+{
+  "name": "Auto-assign urgent Finance cases",
+  "trigger": {
+    "type": "case_created",
+    "filters": {"department": "finance", "priority": "urgent"}
+  },
+  "conditions": [
+    {"field": "assigneeId", "operator": "equals", "value": null}
+  ],
+  "actions": [
+    {"type": "assign", "params": {"queueId": "queue_finance_urgent"}}
+  ],
+  "isActive": true
+}
+```
+
+**Response (201 Created)**:
+```json
+{
+  "data": {
+    "id": "workflow_001",
+    "name": "Auto-assign urgent Finance cases",
+    "isActive": true,
+    "createdAt": "2024-10-20T16:25:00Z"
+  }
+}
+```
+
+---
+
+#### **POST /api/admin/workflows/:id/dry-run**
+
+Test workflow without executing actions.
+
+**Request**:
+```json
+{
+  "testCase": {
+    "department": "finance",
+    "priority": "urgent",
+    "assigneeId": null
+  }
+}
+```
+
+**Response (200 OK)**:
+```json
+{
+  "data": {
+    "matched": true,
+    "triggeredActions": [
+      {
+        "type": "assign",
+        "params": {"queueId": "queue_finance_urgent"},
+        "wouldExecute": true
+      }
+    ]
+  }
+}
+```
+
+---
+
+#### **GET /api/admin/integrations**
+
+List webhook integrations (§6).
+
+**Response (200 OK)**:
+```json
+{
+  "data": [
+    {
+      "id": "int_001",
+      "name": "WhatsApp Business",
+      "type": "whatsapp",
+      "status": "active",
+      "lastSyncAt": "2024-10-20T16:00:00Z"
+    }
+  ]
+}
+```
+
+---
+
+#### **PATCH /api/admin/branding**
+
+Update tenant branding (§8).
+
+**Request**:
+```json
+{
+  "primaryColor": "#1E40AF",
+  "logoUrl": "https://cdn.reops.example/logo.png"
+}
+```
+
+**Response (200 OK)**:
+```json
+{
+  "data": {
+    "primaryColor": "#1E40AF",
+    "logoUrl": "https://cdn.reops.example/logo.png",
+    "updatedAt": "2024-10-20T16:30:00Z"
+  }
+}
+```
+
+---
+
+### 19.5 Knowledge Management
+
+#### **GET /api/km/articles**
+
+**Request**:
+```http
+GET /api/km/articles?status=published&locale=en&page=1&perPage=25
+```
+
+**Response (200 OK)**:
+```json
+{
+  "data": {
+    "items": [
+      {
+        "id": "article_001",
+        "title": "Tuition Payment Policies",
+        "slug": "tuition-payment-policies",
+        "categoryId": "cat_finance",
+        "status": "published",
+        "locale": "en",
+        "viewCount": 342,
+        "helpfulCount": 298,
+        "tags": ["payment", "tuition", "policies"],
+        "publishedAt": "2024-09-15T10:00:00Z",
+        "createdAt": "2024-09-10T14:00:00Z"
+      }
+    ],
+    "total": 48,
+    "page": 1,
+    "pageSize": 25,
+    "hasMore": true
+  }
+}
+```
+
+---
+
+#### **POST /api/km/articles**
+
+**Request**:
+```json
+{
+  "title": "Transcript Request Process",
+  "categoryId": "cat_registrar",
+  "content": "# Transcript Requests\n\nOfficial transcripts...",
+  "locale": "en",
+  "tags": ["transcript", "registrar", "documents"],
+  "status": "draft"
+}
+```
+
+**Response (201 Created)**:
+```json
+{
+  "data": {
+    "id": "article_049",
+    "title": "Transcript Request Process",
+    "slug": "transcript-request-process",
+    "status": "draft",
+    "createdAt": "2024-10-20T16:40:00Z"
+  }
+}
+```
+
+---
+
+#### **POST /api/km/articles/:id/review**
+
+Submit for manager review (§15).
+
+**Request**:
+```json
+{
+  "action": "submit_for_review",
+  "reviewNote": "Ready for publication"
+}
+```
+
+**Response (200 OK)**:
+```json
+{
+  "data": {
+    "id": "article_049",
+    "status": "pending_review",
+    "reviewSubmittedAt": "2024-10-20T16:45:00Z"
+  }
+}
+```
+
+---
+
+#### **GET /api/km/search**
+
+Search articles with relevance scoring.
+
+**Request**:
+```http
+GET /api/km/search?q=payment+installment&locale=en
+```
+
+**Response (200 OK)**:
+```json
+{
+  "data": {
+    "items": [
+      {
+        "id": "article_001",
+        "title": "Tuition Payment Policies",
+        "slug": "tuition-payment-policies",
+        "excerpt": "...students may request 3-month installment plans...",
+        "relevanceScore": 0.94,
+        "matchedFields": ["title", "content"],
+        "categoryId": "cat_finance"
+      }
+    ],
+    "total": 3,
+    "query": "payment installment",
+    "locale": "en"
+  }
+}
+```
+
+---
+
+### 19.6 AI
+
+#### **POST /api/ai/classify**
+
+Classify student message (§17).
+
+**Request**:
+```json
+{
+  "messageBody": "I need my transcript ASAP for visa application",
+  "messageId": "msg_abc123",
+  "studentId": "S2024-5678"
+}
+```
+
+**Response (200 OK)**:
+```json
+{
+  "data": {
+    "classification": {
+      "intent": "registrar_transcript",
+      "confidence": 0.95,
+      "reasoning": "Student requesting transcript with urgency (ASAP) for visa.",
+      "urgency": "high",
+      "sentiment": "neutral",
+      "language": "en",
+      "suggestedTags": ["transcript", "urgent", "visa"]
+    },
+    "modelUsed": "gpt-4o-mini",
+    "latencyMs": 1120
+  }
+}
+```
+
+**Schema Error (422 Unprocessable Entity)**:
+```json
+{
+  "code": "SCHEMA_MISMATCH",
+  "message": "AI output failed schema validation",
+  "details": {
+    "schemaName": "ClassificationResult",
+    "errors": [
+      {
+        "path": ["intent"],
+        "message": "Invalid enum value. Expected 'admissions_inquiry' | 'finance_payment' | ..., received 'unknown_category'"
+      }
+    ],
+    "retryHint": "Model will retry with repair prompt"
+  },
+  "timestamp": "2024-10-20T17:00:00Z"
+}
+```
+
+---
+
+#### **POST /api/ai/draft**
+
+Generate draft reply (§17).
+
+**Request**:
+```json
+{
+  "caseId": "case_xyz789",
+  "studentName": "Fatima Al-Mansoori",
+  "inquiry": "I need my transcript urgently for my visa application.",
+  "intent": "registrar_transcript",
+  "tone": "warm",
+  "language": "en"
+}
+```
+
+**Response (200 OK)**:
+```json
+{
+  "data": {
+    "draft": {
+      "body": "Hello Fatima,\n\nThank you for reaching out...",
+      "tone": "warm",
+      "language": "en",
+      "citations": [
+        {
+          "articleId": "KB-REG-008",
+          "title": "Transcript Request Process",
+          "section": "Urgent Requests",
+          "url": "https://kb.reops.example/registrar/transcripts#urgent"
+        }
+      ],
+      "nextSteps": ["Submit request via Student Portal"],
+      "requiresManagerReview": false
+    },
+    "modelUsed": "claude-3.5-sonnet",
+    "latencyMs": 2340
+  }
+}
+```
+
+**No KB Match (404 Not Found)**:
+```json
+{
+  "code": "NO_KB_MATCH",
+  "message": "No knowledge base articles found for this query",
+  "details": {
+    "intent": "registrar_transcript",
+    "flagged": true,
+    "action": "Draft flagged for manager review. Consider creating KB article."
+  },
+  "timestamp": "2024-10-20T17:05:00Z"
+}
+```
+
+---
+
+#### **POST /api/ai/extract**
+
+Extract structured data (§17).
+
+**Request**:
+```json
+{
+  "messageBody": "My invoice INV-2024-09-1523 shows $1,250 due Oct 15. Student ID S2024-3456.",
+  "messageId": "msg_def456"
+}
+```
+
+**Response (200 OK)**:
+```json
+{
+  "data": {
+    "extraction": {
+      "amountUSD": 1250.00,
+      "studentId": "S2024-3456",
+      "invoiceId": "INV-2024-09-1523",
+      "courseCode": null,
+      "dueDateISO": "2024-10-15T23:59:59Z",
+      "confidence": 0.97,
+      "extractedFields": {}
+    },
+    "modelUsed": "gpt-4o-mini",
+    "latencyMs": 890
+  }
+}
+```
+
+---
+
+### 19.7 Global Search
+
+#### **GET /api/search**
+
+Search across cases, students, articles.
+
+**Request**:
+```http
+GET /api/search?q=Ahmed+Hassan+transcript&scope=cases,students,articles
+```
+
+**Response (200 OK)**:
+```json
+{
+  "data": {
+    "cases": [
+      {
+        "id": "case_abc123",
+        "subject": "Transcript request - Ahmed Hassan",
+        "type": "case",
+        "relevanceScore": 0.92,
+        "department": "registrar"
+      }
+    ],
+    "students": [
+      {
+        "id": "student_123",
+        "studentId": "S2024-3456",
+        "name": "Ahmed Hassan",
+        "type": "student",
+        "relevanceScore": 0.98
+      }
+    ],
+    "articles": [
+      {
+        "id": "article_049",
+        "title": "Transcript Request Process",
+        "type": "article",
+        "relevanceScore": 0.85
+      }
+    ],
+    "total": 3,
+    "query": "Ahmed Hassan transcript"
+  }
+}
+```
+
+---
+
+### 19.8 Export
+
+#### **POST /api/export**
+
+Initiate export job.
+
+**Request**:
+```json
+{
+  "type": "cases",
+  "format": "csv",
+  "filters": {
+    "department": "finance",
+    "dateRange": {
+      "start": "2024-10-01T00:00:00Z",
+      "end": "2024-10-20T23:59:59Z"
+    }
+  },
+  "includePII": false
+}
+```
+
+**Response (202 Accepted)**:
+```json
+{
+  "data": {
+    "jobId": "export_job_001",
+    "status": "processing",
+    "estimatedCompletionSec": 30,
+    "createdAt": "2024-10-20T17:15:00Z"
+  }
+}
+```
+
+---
+
+#### **GET /api/export/:id**
+
+Check export job status.
+
+**Response (200 OK)** - processing:
+```json
+{
+  "data": {
+    "jobId": "export_job_001",
+    "status": "processing",
+    "progress": 0.65,
+    "createdAt": "2024-10-20T17:15:00Z"
+  }
+}
+```
+
+**Response (200 OK)** - ready:
+```json
+{
+  "data": {
+    "jobId": "export_job_001",
+    "status": "completed",
+    "downloadUrl": "https://cdn.reops.example/exports/export_job_001.csv",
+    "expiresAt": "2024-10-21T17:15:00Z",
+    "fileSizeBytes": 245678,
+    "recordCount": 142,
+    "createdAt": "2024-10-20T17:15:00Z",
+    "completedAt": "2024-10-20T17:15:35Z"
+  }
+}
+```
+
+---
+
+### 19.9 SSE (Server-Sent Events)
+
+#### **GET /api/streams/queues** (stub)
+
+Real-time queue statistics (§5, §12).
+
+**Stream Format**:
+```
+event: queue_stats
+data: {"queueId":"queue_finance_001","pending":8,"slaRiskDistribution":{"on_track":5,"at_risk":2,"breached":1},"timestamp":"2024-10-20T17:20:00Z"}
+
+event: queue_stats
+data: {"queueId":"queue_finance_001","pending":7,"slaRiskDistribution":{"on_track":5,"at_risk":2,"breached":0},"timestamp":"2024-10-20T17:20:30Z"}
+```
+
+---
+
+#### **GET /api/streams/case/:id** (stub)
+
+Real-time case timeline events.
+
+**Stream Format**:
+```
+event: case_updated
+data: {"caseId":"case_abc123","field":"status","oldValue":"open","newValue":"resolved","actorId":"agent_finance_002","timestamp":"2024-10-20T17:25:00Z"}
+
+event: message_received
+data: {"caseId":"case_abc123","messageId":"msg_010","senderType":"student","timestamp":"2024-10-20T17:26:00Z"}
+
+event: sla_risk_changed
+data: {"caseId":"case_abc123","oldRisk":"at_risk","newRisk":"breached","timestamp":"2024-10-20T17:27:00Z"}
+```
+
+---
+
+### 19.10 Acceptance Criteria
+
+- [ ] All endpoints include `Idempotency-Key` header support for POST/PUT/PATCH
+- [ ] Pagination uses `page` and `perPage` query params; responses include `hasMore` flag
+- [ ] Sort query param accepts `field:direction` format (e.g., `createdAt:desc`)
+- [ ] Standard error shape includes `code`, `message`, `details`, `timestamp`
+- [ ] GET /api/cases returns paginated list with filters (status, department, priority, assigneeId)
+- [ ] POST /api/cases creates case and returns 201 with full case object
+- [ ] PATCH /api/cases/:id validates state transitions; returns 400 for invalid, 409 for conflict
+- [ ] POST /api/cases/:id/merge returns `undoToken` and validates department match
+- [ ] POST /api/cases/:id/split creates new case from message range
+- [ ] GET /api/manager/overview returns department metrics + agent performance
+- [ ] POST /api/queues/rebalance is idempotent; returns 409 if already in progress
+- [ ] POST /api/admin/workflows/:id/dry-run tests workflow without execution
+- [ ] GET /api/km/search returns relevance scores and matched fields
+- [ ] POST /api/ai/classify returns 422 SCHEMA_MISMATCH with retry hint on validation failure
+- [ ] POST /api/ai/draft returns 404 NO_KB_MATCH if no citations found
+- [ ] GET /api/search supports multi-scope search (cases, students, articles)
+- [ ] POST /api/export returns 202 with jobId; GET /api/export/:id polls status
+- [ ] Export downloadUrl includes expiration timestamp (24h)
+- [ ] SSE /api/streams/queues emits queue_stats events with slaRiskDistribution
+- [ ] SSE /api/streams/case/:id emits case_updated, message_received, sla_risk_changed events
+- [ ] All responses include `meta.requestId` and `meta.latencyMs`
+- [ ] All timestamps use ISO 8601 format with timezone
+
+---
+
+END §19
+
+---
+
+## 20. MSW Handlers & Seeding
+
+### 20.1 Determinism
+
+**Constants**:
+```typescript
+const SEED = 20251030;
+const NOW = new Date('2025-01-30T12:00:00Z');
+```
+
+**PRNG Helpers**:
+```typescript
+// Seeded random number generator (mulberry32)
+function prng(seed: number): () => number {
+  return function() {
+    let t = seed += 0x6D2B79F5;
+    t = Math.imul(t ^ t >>> 15, t | 1);
+    t ^= t + Math.imul(t ^ t >>> 7, t | 61);
+    return ((t ^ t >>> 14) >>> 0) / 4294967296;
+  };
+}
+
+const random = prng(SEED);
+
+// Weighted random selection
+function weighted<T>(items: T[], weights: number[]): T {
+  const total = weights.reduce((sum, w) => sum + w, 0);
+  let r = random() * total;
+  for (let i = 0; i < items.length; i++) {
+    r -= weights[i];
+    if (r <= 0) return items[i];
+  }
+  return items[items.length - 1];
+}
+
+// Random pick from array
+function pick<T>(arr: T[]): T {
+  return arr[Math.floor(random() * arr.length)];
+}
+```
+
+---
+
+### 20.2 Seed Plan
+
+**Total Counts** (aligned with §9.10):
+- **Cases**: 2,000
+- **Users**: 50 (10 Managers, 5 Admins, 35 Agents)
+- **Students**: 500
+- **Articles**: 100 (80 published, 15 draft, 5 pending_review)
+- **Queues**: 12
+- **Workflows**: 8
+- **Audit Events**: 10,000
+
+**Case Distribution**:
+
+| Department       | Count | % Total |
+|------------------|-------|---------|
+| Finance          | 600   | 30%     |
+| Admissions       | 500   | 25%     |
+| Registrar        | 500   | 25%     |
+| IT Support       | 200   | 10%     |
+| Student Affairs  | 150   | 7.5%    |
+| General          | 50    | 2.5%    |
+
+**Priority Distribution**:
+- Low: 40% (800 cases)
+- Medium: 35% (700 cases)
+- High: 20% (400 cases)
+- Urgent: 5% (100 cases)
+
+**Status Distribution**:
+- Open: 35% (700 cases)
+- Pending: 20% (400 cases)
+- Resolved: 30% (600 cases)
+- Closed: 14% (280 cases)
+- Spam: 1% (20 cases)
+
+**SLA Distribution**:
+- On Track: 70% (1,400 cases)
+- At Risk: 20% (400 cases)
+- Breached: 10% (200 cases)
+
+**Channel Distribution**:
+- Email: 50% (1,000 cases)
+- WhatsApp: 25% (500 cases)
+- Webchat: 15% (300 cases)
+- Student Portal: 10% (200 cases)
+
+**Temporal Distribution**:
+- August 2024: +40% volume (280 cases)
+- January 2025: +35% volume (540 cases)
+- Other months: baseline
+
+**Special Cases**:
+- Duplicates: 50 cases (2.5%) marked as potential duplicates
+- Breached SLA: 200 cases with resolvedAt > slaDeadline
+- Long threads: 100 cases with 10+ messages
+- Merged: 30 parent cases with 2-3 merged children
+
+---
+
+### 20.3 Generators
+
+**Function Signatures** (implementation in mock layer):
+
+```typescript
+// Users & Agents
+function generateUser(id: number, role: Role, department?: Department): User;
+function generateAgent(id: number, department: Department, skills: string[]): User & {
+  skills: string[];
+  activeLoad: number;
+  avgResponseTimeMinutes: number;
+};
+
+// Students
+function generateStudent(id: number): StudentProfile & {
+  accountBalance: number;
+  holds: string[];
+  enrollmentYear: number;
+};
+
+// Cases
+function generateCase(
+  id: number,
+  opts: {
+    department: Department;
+    priority: Priority;
+    status: CaseStatus;
+    createdAt: Date;
+    assigneeId?: string;
+  }
+): Case;
+
+function generateCaseThread(caseId: string, messageCount: number): Message[];
+function generateCaseTimeline(caseId: string): TimelineEvent[];
+
+// Articles
+function generateArticle(id: number, locale: Locale, status: 'draft' | 'published' | 'archived'): Article;
+function generateArticleVersion(articleId: string, versionNumber: number): {
+  id: string;
+  articleId: string;
+  content: string;
+  authorId: string;
+  createdAt: string;
+};
+
+// Forms
+function generateFormSchema(id: number, department: Department): FormSchema;
+
+// Workflows
+function generateWorkflow(id: number, department: Department): Workflow;
+
+// Audit Events
+function generateAuditEvent(
+  id: number,
+  eventType: string,
+  actorId: string,
+  entityType: string,
+  entityId: string,
+  timestamp: Date
+): AuditEvent;
+```
+
+---
+
+### 20.4 MSW Handlers
+
+**Handler Structure** (parity with §19):
+
+```typescript
+import { http, HttpResponse } from 'msw';
+
+export const handlers = [
+  // Inbox & Cases (§19.2)
+  http.get('/api/cases', handleGetCases),
+  http.post('/api/cases', handleCreateCase),
+  http.get('/api/cases/:id', handleGetCase),
+  http.patch('/api/cases/:id', handleUpdateCase),
+  http.post('/api/cases/:id/merge', handleMergeCases),
+  http.post('/api/cases/:id/split', handleSplitCase),
+
+  // Manager (§19.3)
+  http.get('/api/manager/overview', handleManagerOverview),
+  http.post('/api/queues/rebalance', handleRebalanceQueue),
+
+  // Admin (§19.4)
+  http.get('/api/admin/users', handleGetUsers),
+  http.post('/api/admin/users', handleCreateUser),
+  http.post('/api/admin/forms', handleCreateForm),
+  http.post('/api/admin/workflows', handleCreateWorkflow),
+  http.post('/api/admin/workflows/:id/dry-run', handleWorkflowDryRun),
+  http.get('/api/admin/integrations', handleGetIntegrations),
+  http.patch('/api/admin/branding', handleUpdateBranding),
+
+  // Knowledge Management (§19.5)
+  http.get('/api/km/articles', handleGetArticles),
+  http.post('/api/km/articles', handleCreateArticle),
+  http.post('/api/km/articles/:id/review', handleReviewArticle),
+  http.get('/api/km/search', handleSearchArticles),
+
+  // AI (§19.6)
+  http.post('/api/ai/classify', handleAIClassify),
+  http.post('/api/ai/draft', handleAIDraft),
+  http.post('/api/ai/extract', handleAIExtract),
+
+  // Global Search (§19.7)
+  http.get('/api/search', handleGlobalSearch),
+
+  // Export (§19.8)
+  http.post('/api/export', handleCreateExport),
+  http.get('/api/export/:id', handleGetExport),
+
+  // SSE (§19.9)
+  http.get('/api/streams/queues', handleQueueStream),
+  http.get('/api/streams/case/:id', handleCaseStream),
+];
+```
+
+**Example Handler** (GET /api/cases with filters):
+
+```typescript
+function handleGetCases({ request }: { request: Request }) {
+  const url = new URL(request.url);
+  const page = parseInt(url.searchParams.get('page') || '1');
+  const perPage = parseInt(url.searchParams.get('perPage') || '25');
+  const status = url.searchParams.get('status');
+  const department = url.searchParams.get('department');
+  const priority = url.searchParams.get('priority');
+  const assigneeId = url.searchParams.get('assigneeId');
+  const search = url.searchParams.get('search');
+  const sort = url.searchParams.get('sort') || 'createdAt:desc';
+
+  // Apply error injection if enabled
+  if (shouldInjectError('/api/cases')) {
+    return HttpResponse.json(
+      { code: 'INTERNAL_ERROR', message: 'Simulated server error' },
+      { status: 500 }
+    );
+  }
+
+  // Filter cases
+  let filtered = [...mockCases];
+  if (status) filtered = filtered.filter(c => c.status === status);
+  if (department) filtered = filtered.filter(c => c.department === department);
+  if (priority) filtered = filtered.filter(c => c.priority === priority);
+  if (assigneeId) filtered = filtered.filter(c => c.assigneeId === assigneeId);
+  if (search) {
+    const lower = search.toLowerCase();
+    filtered = filtered.filter(c =>
+      c.subject.toLowerCase().includes(lower) ||
+      c.tags.some(t => t.toLowerCase().includes(lower))
+    );
+  }
+
+  // Sort
+  const [field, direction] = sort.split(':');
+  filtered.sort((a, b) => {
+    const aVal = a[field as keyof Case];
+    const bVal = b[field as keyof Case];
+    const cmp = aVal < bVal ? -1 : aVal > bVal ? 1 : 0;
+    return direction === 'desc' ? -cmp : cmp;
+  });
+
+  // Paginate
+  const start = (page - 1) * perPage;
+  const items = filtered.slice(start, start + perPage);
+
+  return HttpResponse.json({
+    data: {
+      items,
+      total: filtered.length,
+      page,
+      pageSize: perPage,
+      hasMore: start + perPage < filtered.length
+    },
+    meta: {
+      requestId: `req_${Date.now()}`,
+      latencyMs: Math.floor(random() * 50) + 20
+    }
+  });
+}
+```
+
+---
+
+### 20.5 Time Travel
+
+**Override NOW** to recompute SLA risk:
+
+```typescript
+let CURRENT_TIME = NOW;
+
+export function setMockTime(newTime: Date) {
+  CURRENT_TIME = newTime;
+  recomputeSLARisks();
+}
+
+function recomputeSLARisks() {
+  mockCases.forEach(c => {
+    if (!c.slaDeadline) return;
+
+    const deadline = new Date(c.slaDeadline);
+    const now = CURRENT_TIME;
+    const hoursUntilDeadline = (deadline.getTime() - now.getTime()) / (1000 * 60 * 60);
+
+    if (c.status === 'resolved' || c.status === 'closed') {
+      // Check if resolved/closed before deadline
+      const resolvedAt = new Date(c.resolvedAt || c.closedAt!);
+      c.slaRisk = resolvedAt <= deadline ? 'on_track' : 'breached';
+    } else {
+      // Open/pending cases
+      if (hoursUntilDeadline < 0) {
+        c.slaRisk = 'breached';
+      } else if (hoursUntilDeadline <= 4) {
+        c.slaRisk = 'at_risk';
+      } else {
+        c.slaRisk = 'on_track';
+      }
+    }
+  });
+}
+
+// Usage:
+// setMockTime(new Date('2025-02-15T12:00:00Z'));
+// Cases with deadlines before Feb 15 will now show as breached
+```
+
+---
+
+### 20.6 Error Injection
+
+**Toggleable error rates per endpoint**:
+
+```typescript
+interface ErrorConfig {
+  rate500: number;    // 0.0 to 1.0
+  rate429: number;
+  timeoutMs?: number; // simulate delay, then timeout
+}
+
+const errorInjection: Record<string, ErrorConfig> = {
+  '/api/cases': { rate500: 0, rate429: 0 },
+  '/api/ai/classify': { rate500: 0.02, rate429: 0.05 },
+  '/api/export': { rate500: 0, rate429: 0, timeoutMs: 0 },
+};
+
+export function setErrorRate(endpoint: string, config: Partial<ErrorConfig>) {
+  errorInjection[endpoint] = { ...errorInjection[endpoint], ...config };
+}
+
+function shouldInjectError(endpoint: string): HttpResponse | null {
+  const config = errorInjection[endpoint];
+  if (!config) return null;
+
+  const r = random();
+
+  if (r < config.rate500) {
+    return HttpResponse.json(
+      { code: 'INTERNAL_ERROR', message: 'Simulated server error', timestamp: new Date().toISOString() },
+      { status: 500 }
+    );
+  }
+
+  if (r < config.rate500 + config.rate429) {
+    return HttpResponse.json(
+      { code: 'RATE_LIMITED', message: 'Too many requests', timestamp: new Date().toISOString() },
+      { status: 429, headers: { 'Retry-After': '60' } }
+    );
+  }
+
+  if (config.timeoutMs && config.timeoutMs > 0) {
+    // MSW doesn't directly support timeout, but we can delay response
+    // Implementation would use setTimeout in actual handler
+  }
+
+  return null;
+}
+
+// Usage:
+// setErrorRate('/api/ai/classify', { rate500: 0.1, rate429: 0.05 });
+```
+
+---
+
+### 20.7 Fixtures
+
+**First 5 Cases** (preview):
+```json
+[
+  {
+    "id": "case_001",
+    "subject": "Tuition payment installment request",
+    "status": "resolved",
+    "priority": "medium",
+    "channel": "email",
+    "studentId": "S2024-0001",
+    "assigneeId": "agent_finance_001",
+    "department": "finance",
+    "tags": ["payment", "installment"],
+    "slaDeadline": "2025-01-28T16:00:00Z",
+    "slaRisk": "on_track",
+    "createdAt": "2025-01-26T09:15:00Z",
+    "updatedAt": "2025-01-27T14:30:00Z",
+    "resolvedAt": "2025-01-27T14:30:00Z",
+    "closedAt": null
+  },
+  {
+    "id": "case_002",
+    "subject": "Transcript request for visa application",
+    "status": "open",
+    "priority": "high",
+    "channel": "student_portal",
+    "studentId": "S2024-0012",
+    "assigneeId": "agent_registrar_001",
+    "department": "registrar",
+    "tags": ["transcript", "urgent", "visa"],
+    "slaDeadline": "2025-01-31T16:00:00Z",
+    "slaRisk": "at_risk",
+    "createdAt": "2025-01-29T08:00:00Z",
+    "updatedAt": "2025-01-29T08:00:00Z",
+    "resolvedAt": null,
+    "closedAt": null
+  },
+  {
+    "id": "case_003",
+    "subject": "Application status inquiry",
+    "status": "pending",
+    "priority": "low",
+    "channel": "whatsapp",
+    "studentId": "S2024-0045",
+    "assigneeId": "agent_admissions_002",
+    "department": "admissions",
+    "tags": ["application", "status"],
+    "slaDeadline": "2025-02-02T16:00:00Z",
+    "slaRisk": "on_track",
+    "createdAt": "2025-01-28T11:20:00Z",
+    "updatedAt": "2025-01-29T10:00:00Z",
+    "resolvedAt": null,
+    "closedAt": null
+  },
+  {
+    "id": "case_004",
+    "subject": "Portal login issue",
+    "status": "resolved",
+    "priority": "urgent",
+    "channel": "webchat",
+    "studentId": "S2024-0078",
+    "assigneeId": "agent_it_001",
+    "department": "it_support",
+    "tags": ["portal", "login", "access"],
+    "slaDeadline": "2025-01-29T13:00:00Z",
+    "slaRisk": "on_track",
+    "createdAt": "2025-01-29T09:00:00Z",
+    "updatedAt": "2025-01-29T11:45:00Z",
+    "resolvedAt": "2025-01-29T11:45:00Z",
+    "closedAt": null
+  },
+  {
+    "id": "case_005",
+    "subject": "Financial aid eligibility question",
+    "status": "open",
+    "priority": "medium",
+    "channel": "email",
+    "studentId": "S2024-0099",
+    "assigneeId": null,
+    "department": "finance",
+    "tags": ["financial-aid", "eligibility"],
+    "slaDeadline": "2025-01-31T16:00:00Z",
+    "slaRisk": "on_track",
+    "createdAt": "2025-01-29T14:00:00Z",
+    "updatedAt": "2025-01-29T14:00:00Z",
+    "resolvedAt": null,
+    "closedAt": null
+  }
+]
+```
+
+---
+
+**First 5 Articles** (preview):
+```json
+[
+  {
+    "id": "article_001",
+    "title": "Tuition Payment Policies",
+    "slug": "tuition-payment-policies",
+    "content": "# Tuition Payment Policies\n\nStudents must pay tuition by the 15th of each month...",
+    "categoryId": "cat_finance",
+    "authorId": "user_manager_001",
+    "status": "published",
+    "locale": "en",
+    "viewCount": 542,
+    "helpfulCount": 489,
+    "tags": ["payment", "tuition", "policies"],
+    "createdAt": "2024-09-01T10:00:00Z",
+    "updatedAt": "2025-01-15T14:00:00Z",
+    "publishedAt": "2024-09-05T10:00:00Z"
+  },
+  {
+    "id": "article_002",
+    "title": "Transcript Request Process",
+    "slug": "transcript-request-process",
+    "content": "# Transcript Requests\n\nOfficial transcripts can be requested through...",
+    "categoryId": "cat_registrar",
+    "authorId": "user_manager_002",
+    "status": "published",
+    "locale": "en",
+    "viewCount": 823,
+    "helpfulCount": 756,
+    "tags": ["transcript", "registrar", "documents"],
+    "createdAt": "2024-09-10T11:00:00Z",
+    "updatedAt": "2025-01-10T16:00:00Z",
+    "publishedAt": "2024-09-15T10:00:00Z"
+  },
+  {
+    "id": "article_003",
+    "title": "سياسات دفع الرسوم الدراسية",
+    "slug": "tuition-payment-policies-ar",
+    "content": "# سياسات دفع الرسوم الدراسية\n\nيجب على الطلاب دفع الرسوم الدراسية بحلول اليوم الخامس عشر من كل شهر...",
+    "categoryId": "cat_finance",
+    "authorId": "user_manager_001",
+    "status": "published",
+    "locale": "ar",
+    "viewCount": 389,
+    "helpfulCount": 342,
+    "tags": ["payment", "tuition", "policies"],
+    "createdAt": "2024-09-20T10:00:00Z",
+    "updatedAt": "2025-01-15T14:00:00Z",
+    "publishedAt": "2024-09-25T10:00:00Z"
+  },
+  {
+    "id": "article_004",
+    "title": "Application Requirements",
+    "slug": "application-requirements",
+    "content": "# Application Requirements\n\nProspective students must submit...",
+    "categoryId": "cat_admissions",
+    "authorId": "user_manager_003",
+    "status": "published",
+    "locale": "en",
+    "viewCount": 1234,
+    "helpfulCount": 1089,
+    "tags": ["admissions", "application", "requirements"],
+    "createdAt": "2024-08-15T09:00:00Z",
+    "updatedAt": "2025-01-05T11:00:00Z",
+    "publishedAt": "2024-08-20T10:00:00Z"
+  },
+  {
+    "id": "article_005",
+    "title": "Student Portal Access Guide",
+    "slug": "student-portal-access-guide",
+    "content": "# Student Portal Access\n\nTo access the student portal...",
+    "categoryId": "cat_it",
+    "authorId": "user_admin_001",
+    "status": "draft",
+    "locale": "en",
+    "viewCount": 0,
+    "helpfulCount": 0,
+    "tags": ["portal", "access", "login"],
+    "createdAt": "2025-01-20T13:00:00Z",
+    "updatedAt": "2025-01-28T15:00:00Z",
+    "publishedAt": null
+  }
+]
+```
+
+---
+
+**First 5 Users** (preview):
+```json
+[
+  {
+    "id": "user_001",
+    "email": "admin@reops.example",
+    "name": "System Admin",
+    "role": "admin",
+    "department": null,
+    "locale": "en",
+    "avatarUrl": "https://i.pravatar.cc/150?u=user_001",
+    "createdAt": "2024-08-01T10:00:00Z",
+    "updatedAt": "2024-08-01T10:00:00Z"
+  },
+  {
+    "id": "user_002",
+    "email": "sara.almansoori@reops.example",
+    "name": "Sara Al-Mansoori",
+    "role": "manager",
+    "department": "finance",
+    "locale": "en",
+    "avatarUrl": "https://i.pravatar.cc/150?u=user_002",
+    "createdAt": "2024-08-05T10:00:00Z",
+    "updatedAt": "2024-08-05T10:00:00Z"
+  },
+  {
+    "id": "user_003",
+    "email": "ahmed.ibrahim@reops.example",
+    "name": "Ahmed Ibrahim",
+    "role": "agent",
+    "department": "finance",
+    "locale": "ar",
+    "avatarUrl": "https://i.pravatar.cc/150?u=user_003",
+    "createdAt": "2024-08-10T10:00:00Z",
+    "updatedAt": "2024-08-10T10:00:00Z"
+  },
+  {
+    "id": "user_004",
+    "email": "fatima.alhassan@reops.example",
+    "name": "Fatima Al-Hassan",
+    "role": "agent",
+    "department": "registrar",
+    "locale": "ar",
+    "avatarUrl": "https://i.pravatar.cc/150?u=user_004",
+    "createdAt": "2024-08-12T10:00:00Z",
+    "updatedAt": "2024-08-12T10:00:00Z"
+  },
+  {
+    "id": "user_005",
+    "email": "omar.said@reops.example",
+    "name": "Omar Said",
+    "role": "manager",
+    "department": "admissions",
+    "locale": "en",
+    "avatarUrl": "https://i.pravatar.cc/150?u=user_005",
+    "createdAt": "2024-08-15T10:00:00Z",
+    "updatedAt": "2024-08-15T10:00:00Z"
+  }
+]
+```
+
+---
+
+### 20.8 Telemetry Stubs
+
+**Console Emit** for `reops.*` events:
+
+```typescript
+export function emitTelemetry<K extends keyof TelemetryEventMap>(
+  eventName: K,
+  properties: TelemetryEventMap[K]
+): void {
+  console.log(`[TELEMETRY] ${eventName}`, {
+    timestamp: new Date().toISOString(),
+    ...properties
+  });
+}
+
+// Usage in handlers:
+emitTelemetry('reops.inbox.case_created', {
+  caseId: 'case_abc123',
+  department: 'finance',
+  priority: 'high',
+  channel: 'email'
+});
+
+emitTelemetry('reops.ai.schema_validated', {
+  modelId: 'gpt-4o-mini',
+  task: 'classify',
+  schemaName: 'ClassificationResult',
+  ok: true,
+  ms: 1120
+});
+
+emitTelemetry('reops.km.article_viewed', {
+  articleId: 'article_001',
+  viewerId: 'user_003',
+  source: 'search'
+});
+```
+
+**Example Console Output**:
+```
+[TELEMETRY] reops.inbox.case_created {
+  timestamp: '2025-01-30T12:05:00Z',
+  caseId: 'case_abc123',
+  department: 'finance',
+  priority: 'high',
+  channel: 'email'
+}
+[TELEMETRY] reops.ai.schema_validated {
+  timestamp: '2025-01-30T12:05:02Z',
+  modelId: 'gpt-4o-mini',
+  task: 'classify',
+  schemaName: 'ClassificationResult',
+  ok: true,
+  ms: 1120
+}
+```
+
+---
+
+### 20.9 Acceptance Criteria
+
+- [ ] SEED constant set to 20251030; NOW set to 2025-01-30T12:00:00Z
+- [ ] prng() generates deterministic sequence; weighted() and pick() use seeded random
+- [ ] Seed plan generates exactly 2,000 cases with distribution matching §9.10
+- [ ] Department distribution: Finance 30%, Admissions 25%, Registrar 25%, IT 10%, Student Affairs 7.5%, General 2.5%
+- [ ] Priority distribution: Low 40%, Medium 35%, High 20%, Urgent 5%
+- [ ] SLA distribution: On Track 70%, At Risk 20%, Breached 10%
+- [ ] August 2024 shows +40% volume spike; January 2025 shows +35% volume spike
+- [ ] 50 duplicate cases flagged; 200 breached SLA cases; 100 cases with 10+ messages
+- [ ] All generator functions return types matching §18 core types
+- [ ] MSW handlers implement all endpoints from §19 (cases, manager, admin, km, ai, search, export, sse)
+- [ ] Example handler (GET /api/cases) filters by status, department, priority, assigneeId, search
+- [ ] setMockTime() updates CURRENT_TIME and triggers recomputeSLARisks()
+- [ ] SLA risk recomputation: <0h = breached, ≤4h = at_risk, >4h = on_track
+- [ ] setErrorRate() configures rate500, rate429, timeoutMs per endpoint
+- [ ] shouldInjectError() returns 500/429 responses based on configured rates
+- [ ] Fixtures include first 5 cases, 5 articles, 5 users with realistic data
+- [ ] emitTelemetry() logs to console with timestamp and event properties
+- [ ] Telemetry events use TelemetryEventMap types from §18.4
+
+---
+
+END §20
