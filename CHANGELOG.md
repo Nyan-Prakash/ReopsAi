@@ -31,7 +31,10 @@
   - Handler stubs aligned with SPEC §19, §20
 
 - **Test utilities** (`src/lib/test-utils.ts`)
-  - `MockClock` for deterministic time testing
+  - `MockClock` for deterministic time testing with Vitest fake timers integration
+  - `install()` initializes fake timers and sets system time
+  - `advance()` advances both timers and system clock synchronously
+  - `withMockClock()` helper for scoped clock usage with auto-cleanup
   - Seeded random number generator (§20.1)
   - Mock storage helpers
   - Async wait utilities

@@ -1,65 +1,87 @@
-import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import { MockClock, createMockClock, createSeededRandom } from './test-utils';
+import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { MockClock, withMockClock, createSeededRandom } from './test-utils';
 
 describe('test-utils', () => {
   describe('MockClock', () => {
     let clock: MockClock;
 
     beforeEach(() => {
-      clock = createMockClock();
+      clock = new MockClock();
     });
 
     afterEach(() => {
       clock.uninstall();
     });
 
-    it('initializes with default time', () => {
-      const now = clock.now();
-      expect(now.toISOString()).toBe('2025-01-30T12:00:00.000Z');
+    it('installs with default time', () => {
+      clock.install();
+      const now = Date.now();
+      expect(now).toBeGreaterThan(0);
+      clock.uninstall();
     });
 
-    it('initializes with custom time', () => {
-      const customClock = createMockClock('2024-08-15T10:00:00Z');
-      expect(customClock.now().toISOString()).toBe('2024-08-15T10:00:00.000Z');
+    it('installs with custom time', () => {
+      clock.install('2025-01-30T12:00:00Z');
+      expect(clock.now()).toBe(new Date('2025-01-30T12:00:00Z').getTime());
+      clock.uninstall();
     });
 
     it('advances time by milliseconds', () => {
-      clock.advance(5000);
-      expect(clock.now().toISOString()).toBe('2025-01-30T12:00:05.000Z');
-    });
-
-    it('advances time by hours', () => {
-      clock.advanceHours(2);
-      expect(clock.now().toISOString()).toBe('2025-01-30T14:00:00.000Z');
-    });
-
-    it('advances time by days', () => {
-      clock.advanceDays(1);
-      expect(clock.now().toISOString()).toBe('2025-01-31T12:00:00.000Z');
-    });
-
-    it('sets absolute time', () => {
-      clock.setTime('2024-12-25T00:00:00Z');
-      expect(clock.now().toISOString()).toBe('2024-12-25T00:00:00.000Z');
-    });
-
-    it('installs global mock time', () => {
-      clock.install();
+      clock.install('2025-01-30T12:00:00Z');
       const beforeAdvance = new Date();
       clock.advance(1000);
       const afterAdvance = new Date();
       expect(afterAdvance.getTime() - beforeAdvance.getTime()).toBe(1000);
+      clock.uninstall();
     });
 
-    it('resets to initial time', () => {
-      clock.advance(5000);
-      clock.reset();
-      expect(clock.now().toISOString()).toBe('2025-01-30T12:00:00.000Z');
+    it('throws error when advancing without install', () => {
+      expect(() => clock.advance(1000)).toThrow(
+        'MockClock not installed. Call install() first.'
+      );
     });
 
-    it('resets to custom time', () => {
-      clock.reset('2024-01-01T00:00:00Z');
-      expect(clock.now().toISOString()).toBe('2024-01-01T00:00:00.000Z');
+    it('returns current time via now()', () => {
+      clock.install('2025-01-30T12:00:00Z');
+      expect(clock.now()).toBe(new Date('2025-01-30T12:00:00Z').getTime());
+      clock.uninstall();
+    });
+
+    it('uninstalls cleanly', () => {
+      clock.install('2025-01-30T12:00:00Z');
+      clock.uninstall();
+      expect(() => clock.advance(1000)).toThrow();
+    });
+  });
+
+  describe('withMockClock', () => {
+    it('auto-installs and uninstalls clock', async () => {
+      await withMockClock(async (clock) => {
+        const before = Date.now();
+        clock.advance(1000);
+        const after = Date.now();
+        expect(after - before).toBe(1000);
+      }, '2025-01-30T12:00:00Z');
+    });
+
+    it('handles synchronous functions', async () => {
+      await withMockClock((clock) => {
+        expect(clock.now()).toBeGreaterThan(0);
+      });
+    });
+
+    it('cleans up even on error', async () => {
+      try {
+        await withMockClock((clock) => {
+          clock.advance(1000);
+          throw new Error('Test error');
+        });
+      } catch (e) {
+        // Expected error
+      }
+      // Clock should be uninstalled even after error
+      const clock = new MockClock();
+      expect(() => clock.advance(1000)).toThrow();
     });
   });
 

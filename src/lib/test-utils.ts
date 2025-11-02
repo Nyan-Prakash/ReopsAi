@@ -1,85 +1,68 @@
-/**
- * Test Utilities
- * Mock clock and deterministic helpers
- * Aligned with SPEC_MASTER.md §20
- */
-
 import { vi } from 'vitest';
 
 /**
- * Mock Clock Helper
- * Provides deterministic time for tests
+ * MockClock wraps Vitest fake timers so advancing time also advances Date.now()/new Date().
+ * Usage:
+ *   const clock = new MockClock();
+ *   clock.install('2025-01-01T00:00:00Z');
+ *   // ... do things
+ *   clock.advance(1000); // +1s
+ *   clock.uninstall();
  */
 export class MockClock {
-  private currentTime: Date;
+  private installed = false;
+  private start = 0;
 
-  constructor(initialTime: Date | string = '2025-01-30T12:00:00Z') {
-    this.currentTime = new Date(initialTime);
+  install(now?: number | Date | string) {
+    vi.useFakeTimers();
+    const ts =
+      now === undefined
+        ? Date.now()
+        : typeof now === 'number'
+          ? now
+          : new Date(now).getTime();
+    this.start = ts;
+    vi.setSystemTime(ts);
+    this.installed = true;
   }
 
   /**
-   * Get current mock time
+   * Advance timers AND system clock by `ms`.
+   * Requires install() first.
    */
-  now(): Date {
-    return new Date(this.currentTime);
+  advance(ms: number) {
+    if (!this.installed) {
+      throw new Error('MockClock not installed. Call install() first.');
+    }
+    vi.advanceTimersByTime(ms);
   }
 
-  /**
-   * Advance time by milliseconds
-   */
-  advance(ms: number): void {
-    this.currentTime = new Date(this.currentTime.getTime() + ms);
+  now(): number {
+    return Date.now();
   }
 
-  /**
-   * Advance time by days
-   */
-  advanceDays(days: number): void {
-    this.advance(days * 24 * 60 * 60 * 1000);
-  }
-
-  /**
-   * Advance time by hours
-   */
-  advanceHours(hours: number): void {
-    this.advance(hours * 60 * 60 * 1000);
-  }
-
-  /**
-   * Set absolute time
-   */
-  setTime(time: Date | string): void {
-    this.currentTime = new Date(time);
-  }
-
-  /**
-   * Install mock clock globally
-   */
-  install(): void {
-    vi.setSystemTime(this.currentTime);
-  }
-
-  /**
-   * Uninstall mock clock
-   */
-  uninstall(): void {
-    vi.useRealTimers();
-  }
-
-  /**
-   * Reset to initial time
-   */
-  reset(initialTime: Date | string = '2025-01-30T12:00:00Z'): void {
-    this.currentTime = new Date(initialTime);
-    vi.setSystemTime(this.currentTime);
+  uninstall() {
+    if (this.installed) {
+      vi.useRealTimers();
+      this.installed = false;
+    }
   }
 }
 
 /**
- * Create a mock clock instance
+ * Helper to scope a test with a clock that auto-cleans.
  */
-export function createMockClock(initialTime?: Date | string): MockClock {
-  return new MockClock(initialTime);
+export async function withMockClock<T>(
+  fn: (clock: MockClock) => Promise<T> | T,
+  start?: number | Date | string
+): Promise<T> {
+  const clock = new MockClock();
+  clock.install(start);
+  try {
+    return await fn(clock);
+  } finally {
+    clock.uninstall();
+  }
 }
 
 /**
