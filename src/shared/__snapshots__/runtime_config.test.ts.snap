@@ -1,0 +1,41 @@
+// Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
+
+exports[`runtime_config > Flag Matrix Snapshot > matches configuration with all AI features enabled 1`] = `
+{
+  "DEMO_SCOREBOARD": true,
+  "LLM_MODE": "draft",
+  "PII_MASK": false,
+  "SLA_CAL_ENABLED": true,
+  "USE_LLM": true,
+}
+`;
+
+exports[`runtime_config > Flag Matrix Snapshot > matches configuration with classify mode 1`] = `
+{
+  "DEMO_SCOREBOARD": false,
+  "LLM_MODE": "classify",
+  "PII_MASK": true,
+  "SLA_CAL_ENABLED": true,
+  "USE_LLM": true,
+}
+`;
+
+exports[`runtime_config > Flag Matrix Snapshot > matches configuration with minimal features 1`] = `
+{
+  "DEMO_SCOREBOARD": false,
+  "LLM_MODE": "none",
+  "PII_MASK": true,
+  "SLA_CAL_ENABLED": false,
+  "USE_LLM": false,
+}
+`;
+
+exports[`runtime_config > Flag Matrix Snapshot > matches expected default configuration 1`] = `
+{
+  "DEMO_SCOREBOARD": false,
+  "LLM_MODE": "none",
+  "PII_MASK": true,
+  "SLA_CAL_ENABLED": true,
+  "USE_LLM": false,
+}
+`;
