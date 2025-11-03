@@ -1,6 +1,7 @@
 import { http, HttpResponse } from 'msw';
 import { allCases, first5Cases, generateCaseThread } from './seed-data';
 import { Case, Department, CaseStatus, Priority, SLARisk, Paginated } from '@/types';
+import { inboxHandlers } from './inbox-handlers';
 
 /**
  * MSW Handlers
@@ -311,4 +312,136 @@ export const handlers = [
       },
     });
   }),
+
+  // GET /api/kb/:id - Get single article
+  http.get('/api/kb/:id', ({ params }) => {
+    const { id } = params;
+    const article = mockArticles.find((a) => a.id === id);
+
+    if (!article) {
+      return HttpResponse.json(
+        {
+          error: {
+            code: 'ARTICLE_NOT_FOUND',
+            message: `Article with ID ${id} not found`,
+          },
+        },
+        { status: 404 }
+      );
+    }
+
+    return HttpResponse.json({
+      data: article,
+    });
+  }),
+
+  // POST /api/kb/:id/feedback - Submit article feedback
+  http.post('/api/kb/:id/feedback', async ({ params, request }) => {
+    const { id } = params;
+    const body = (await request.json()) as Record<string, any>;
+
+    // Just log for now (telemetry stub)
+    console.log('[MSW] Article feedback:', { articleId: id, ...body });
+
+    return HttpResponse.json({
+      data: { success: true },
+    });
+  }),
+
+  // POST /api/request - Submit a service request
+  http.post('/api/request', async ({ request }) => {
+    const body = (await request.json()) as Record<string, any>;
+
+    // Generate a ticket ID
+    const ticketId = `CASE-${String(Math.floor(Math.random() * 100000000)).padStart(8, '0')}`;
+    const token = `tok_${Math.random().toString(36).substring(2, 15)}`;
+
+    // Log for telemetry
+    console.log('[MSW] Service request created:', { ticketId, ...body });
+
+    return HttpResponse.json({
+      data: {
+        id: ticketId,
+        ticketNumber: `TKT-${String(Math.floor(Math.random() * 100000000)).padStart(8, '0')}`,
+        token,
+        status: 'submitted',
+        createdAt: new Date().toISOString(),
+      },
+    });
+  }),
+
+  // GET /api/request/:id - Get request status
+  http.get('/api/request/:id', ({ params, request }) => {
+    const { id } = params;
+    const url = new URL(request.url);
+    const token = url.searchParams.get('token');
+
+    // Mock request data
+    const mockRequest = {
+      id,
+      ticketNumber: `TKT-${String(id).replace('CASE-', '')}`,
+      status: 'open',
+      department: 'finance',
+      subject: 'Payment Plan Request',
+      description: 'I would like to set up a payment plan for my tuition balance.',
+      createdAt: '2025-01-28T10:00:00Z',
+      updatedAt: '2025-01-30T12:00:00Z',
+      resolvedAt: null,
+      canReopen: false,
+      timeline: [
+        {
+          type: 'created',
+          message: 'Request submitted',
+          timestamp: '2025-01-28T10:00:00Z',
+        },
+        {
+          type: 'status_change',
+          message: 'Status changed to Open',
+          timestamp: '2025-01-28T10:05:00Z',
+        },
+      ],
+    };
+
+    return HttpResponse.json({
+      data: mockRequest,
+    });
+  }),
+
+  // PATCH /api/request/:id/reopen - Reopen a resolved request
+  http.patch('/api/request/:id/reopen', async ({ params, request }) => {
+    const { id } = params;
+    const body = (await request.json()) as Record<string, any>;
+
+    console.log('[MSW] Request reopened:', { id, ...body });
+
+    return HttpResponse.json({
+      data: {
+        success: true,
+        message: 'Request reopened successfully',
+      },
+    });
+  }),
+
+  // POST /api/chat/escalate - Escalate chat to ticket
+  http.post('/api/chat/escalate', async ({ request }) => {
+    const body = (await request.json()) as Record<string, any>;
+
+    const ticketId = `CASE-${String(Math.floor(Math.random() * 100000000)).padStart(8, '0')}`;
+    const token = `tok_${Math.random().toString(36).substring(2, 15)}`;
+
+    console.log('[MSW] Chat escalated to ticket:', { ticketId, ...body });
+
+    return HttpResponse.json({
+      data: {
+        id: ticketId,
+        ticketNumber: `TKT-${String(Math.floor(Math.random() * 100000000)).padStart(8, '0')}`,
+        token,
+        status: 'submitted',
+        createdAt: new Date().toISOString(),
+      },
+    });
+  }),
+
+  // Inbox handlers (imported from inbox-handlers.ts)
+  ...inboxHandlers,
 ];

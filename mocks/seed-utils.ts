@@ -98,7 +98,7 @@ export function calculateSLARisk(
   status: string,
   resolvedAt: Date | null,
   closedAt: Date | null
-): string {
+): 'on_track' | 'at_risk' | 'breached' {
   if (!slaDeadline) return 'on_track';
 
   const now = NOW;

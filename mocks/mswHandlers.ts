@@ -94,7 +94,7 @@ export const submitArticleFeedbackHandler = http.post('/api/kb/:id/feedback', as
   await delay(150);
 
   const { id } = params;
-  const body = await request.json();
+  const body = (await request.json()) as Record<string, any>;
   const { helpful } = body;
 
   // Update article in mock data
@@ -145,7 +145,7 @@ export const getCatalogHandler = http.get('/api/catalog', async ({ request }) =>
 export const createRequestHandler = http.post('/api/request', async ({ request }) => {
   await delay(400);
 
-  const body = await request.json();
+  const body = (await request.json()) as Record<string, any>;
   const { serviceId, studentInfo, formData } = body;
 
   const service = catalogItems.find((s) => s.id === serviceId);
@@ -159,7 +159,7 @@ export const createRequestHandler = http.post('/api/request', async ({ request }
   const newTicket = {
     id: `req-${Date.now()}`,
     ticketNumber: `TKT-${new Date().getFullYear()}${String(requestTickets.length + 1).padStart(4, '0')}`,
-    status: 'Submitted',
+    status: 'Submitted' as const,
     department: service.department,
     serviceName: service.name,
     description: formData.description || formData.reason || 'New service request',
@@ -212,7 +212,7 @@ export const reopenRequestHandler = http.patch('/api/request/:id/reopen', async 
   await delay(300);
 
   const { id } = params;
-  const body = await request.json();
+  const body = (await request.json()) as Record<string, any>;
   const { reason } = body;
 
   const ticket = requestTickets.find((t) => t.id === id);
@@ -249,7 +249,7 @@ export const reopenRequestHandler = http.patch('/api/request/:id/reopen', async 
 export const escalateChatHandler = http.post('/api/chat/escalate', async ({ request }) => {
   await delay(350);
 
-  const body = await request.json();
+  const body = (await request.json()) as Record<string, any>;
   const { context, department, serviceId, studentInfo, description } = body;
 
   const service = catalogItems.find((s) => s.id === serviceId);
@@ -258,7 +258,7 @@ export const escalateChatHandler = http.post('/api/chat/escalate', async ({ requ
   const newTicket = {
     id: `req-chat-${Date.now()}`,
     ticketNumber: `TKT-${new Date().getFullYear()}${String(requestTickets.length + 1).padStart(4, '0')}`,
-    status: 'Submitted',
+    status: 'Submitted' as const,
     department: department || 'Other',
     serviceName,
     description: `Escalated from chat: ${description}\n\nContext: ${context}`,

@@ -47,6 +47,7 @@ export type Locale =
 export type SLARisk =
   | 'on_track'
   | 'at_risk'
+  | 'breached'
   | 'breached';
 
 // =============================================================================
